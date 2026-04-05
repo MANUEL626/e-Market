@@ -2,16 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { 
-  LayoutDashboard, 
-  Package, 
-  LineChart, 
-  Users, 
-  Truck, 
-  Mail, 
-  Search, 
+import { useEffect, useState } from "react";
+import {
+  displayNameFromUser,
+  getStoredMemberProfile,
+  initialsFromUser,
+} from "@/lib/member-profile-storage";
+import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import {
+  LayoutDashboard,
+  Package,
+  LineChart,
+  Users,
+  Truck,
+  Mail,
+  Search,
   Bell,
-  Settings
+  Settings,
+  ClipboardList,
 } from "lucide-react";
 
 export default function DashboardLayout({
@@ -20,6 +28,37 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const [orgLabel, setOrgLabel] = useState("Indigo Market");
+  const [userLabel, setUserLabel] = useState("The Indigo Marketplace");
+  const [userInitials, setUserInitials] = useState("AL");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function applyFromStorage() {
+      const p = getStoredMemberProfile();
+      if (!p) return;
+      const org = p.memberships.find((m) => m.organization)?.organization;
+      if (!cancelled) {
+        setOrgLabel(org?.name ?? "Indigo Market");
+        setUserLabel(displayNameFromUser(p.user));
+        setUserInitials(initialsFromUser(p.user));
+      }
+    }
+
+    applyFromStorage();
+
+    (async () => {
+      if (!getStoredMemberProfile()) {
+        await loadMemberProfileForSession();
+        if (!cancelled) applyFromStorage();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isActive = (path: string) => {
     if (path === "/dashboard" && pathname === "/dashboard") return true;
@@ -39,7 +78,7 @@ export default function DashboardLayout({
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-gray-100 flex flex-col hidden md:flex">
         <div className="p-6">
-          <h2 className="text-xl font-bold text-[#3730A3] tracking-tight">Indigo Market</h2>
+          <h2 className="text-xl font-bold text-[#3730A3] tracking-tight line-clamp-2">{orgLabel}</h2>
           <p className="text-[10px] font-bold text-gray-400 tracking-widest mt-1 uppercase">Premium Merchant</p>
         </div>
 
@@ -51,6 +90,10 @@ export default function DashboardLayout({
           <Link href="/dashboard/stock" className={linkClass("/dashboard/stock")}>
             <Package className="w-5 h-5" />
             Stock
+          </Link>
+          <Link href="/dashboard/orders" className={linkClass("/dashboard/orders")}>
+            <ClipboardList className="w-5 h-5" />
+            Commandes
           </Link>
           <Link href="/dashboard/sales" className={linkClass("/dashboard/sales")}>
             <LineChart className="w-5 h-5" />
@@ -92,9 +135,11 @@ export default function DashboardLayout({
               <Settings className="w-5 h-5" />
             </Link>
             <div className="flex items-center gap-3 border-l border-gray-200 pl-6">
-              <span className="text-sm font-medium text-gray-700">The Indigo Marketplace</span>
-              <div className="w-9 h-9 bg-indigo-100 rounded-full overflow-hidden border-2 border-white shadow-sm flex justify-center items-center">
-                <span className="text-sm font-bold text-indigo-700">AL</span>
+              <span className="text-sm font-medium text-gray-700 max-w-[200px] truncate" title={userLabel}>
+                {userLabel}
+              </span>
+              <div className="w-9 h-9 bg-indigo-100 rounded-full overflow-hidden border-2 border-white shadow-sm flex justify-center items-center shrink-0">
+                <span className="text-sm font-bold text-indigo-700">{userInitials}</span>
               </div>
             </div>
           </div>
