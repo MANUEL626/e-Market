@@ -1,19 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { 
   Bell, 
   HelpCircle,
   User,
-  Lock,
-  Users,
   CreditCard,
-  Key,
   LogOut,
   Building2,
-  BookOpen
+  BookOpen,
+  Loader2
 } from "lucide-react";
+import { performClientLogout } from "@/lib/auth/logout-client";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import {
+  displayNameFromUser,
+  initialsFromUser,
+} from "@/lib/member-profile-storage";
 
 export default function SettingsLayout({
   children,
@@ -21,18 +26,95 @@ export default function SettingsLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const { profile } = useMemberProfile();
+  const headerUser = profile?.user;
+  const headerName = headerUser ? displayNameFromUser(headerUser) : null;
+  const headerInitials = headerUser ? initialsFromUser(headerUser) : "?";
+
+  useEffect(() => {
+    if (!logoutConfirmOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !loggingOut) setLogoutConfirmOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [logoutConfirmOpen, loggingOut]);
+
+  async function confirmLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await performClientLogout();
+      setLogoutConfirmOpen(false);
+      router.replace("/login");
+    } finally {
+      setLoggingOut(false);
+    }
+  }
 
   const navLinks = [
-    { name: "General", path: "/settings/general", icon: Building2 },
-    { name: "Team", path: "/settings/team", icon: Users },
-    { name: "Security", path: "/settings/security", icon: Lock },
-    { name: "Profile", path: "/settings/profile", icon: User },
-    { name: "Billing", path: "/settings/billing", icon: CreditCard },
-    { name: "API Keys", path: "/settings/apikeys", icon: Key },
+    { name: "Général", path: "/settings/general", icon: Building2 },
+    { name: "Profil", path: "/settings/profile", icon: User },
+    { name: "Facturation", path: "/settings/billing", icon: CreditCard },
   ];
 
   return (
     <div className="flex flex-col min-h-screen bg-[#f8fafc]">
+      {logoutConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+          role="presentation"
+        >
+          <button
+            type="button"
+            aria-label="Close"
+            disabled={loggingOut}
+            className="absolute inset-0 bg-gray-900/40 backdrop-blur-[2px] disabled:pointer-events-none"
+            onClick={() => !loggingOut && setLogoutConfirmOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-dialog-title"
+            className="relative z-10 w-full max-w-md rounded-2xl border border-gray-100 bg-white p-6 shadow-xl"
+          >
+            <h2
+              id="logout-dialog-title"
+              className="text-lg font-extrabold text-gray-900"
+            >
+              Sign out?
+            </h2>
+            <p className="mt-2 text-sm text-gray-500">
+              You will need to sign in again to access your workspace.
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={loggingOut}
+                onClick={() => setLogoutConfirmOpen(false)}
+                className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={loggingOut}
+                onClick={confirmLogout}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-70 sm:w-auto"
+              >
+                {loggingOut && (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                )}
+                {loggingOut ? "Signing out…" : "Sign out"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Navigation */}
       <header className="h-16 bg-white border-b border-gray-100 flex items-center justify-between px-8 shrink-0 z-10">
         <div className="flex items-center gap-8">
@@ -51,9 +133,21 @@ export default function SettingsLayout({
             <span className="absolute top-0 right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
           </button>
           <button className="text-gray-400 hover:text-gray-600 transition"><HelpCircle className="w-5 h-5" /></button>
-          <div className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 shadow-sm cursor-pointer ml-2">
-            <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=150&h=150&auto=format&fit=crop" alt="User" className="w-full h-full object-cover" />
-          </div>
+          <Link
+            href="/settings/profile"
+            className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 shadow-sm ml-2 bg-indigo-100 flex items-center justify-center shrink-0"
+            title={headerName ?? "Profil"}
+          >
+            {headerUser?.profile_picture ? (
+              <img
+                src={headerUser.profile_picture}
+                alt={headerName ?? "Profil"}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span className="text-[10px] font-extrabold text-indigo-700">{headerInitials}</span>
+            )}
+          </Link>
         </div>
       </header>
       
@@ -97,9 +191,15 @@ export default function SettingsLayout({
              <button className="flex items-center gap-3 px-4 py-2 w-full text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-xl transition">
                <HelpCircle className="w-4 h-4" /> Support
              </button>
-             <Link href="/login" className="flex items-center gap-3 px-4 py-2 w-full text-sm font-medium text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition mt-2 border-t border-gray-50 pt-3">
-               <LogOut className="w-4 h-4" /> Logout
-             </Link>
+             <button
+               type="button"
+               disabled={loggingOut}
+               onClick={() => setLogoutConfirmOpen(true)}
+               className="flex items-center gap-3 px-4 py-2 w-full text-sm font-medium text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition mt-2 border-t border-gray-50 pt-3 disabled:opacity-60 disabled:pointer-events-none"
+             >
+               <LogOut className="w-4 h-4 shrink-0" />
+               Logout
+             </button>
           </div>
         </aside>
 
