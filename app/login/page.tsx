@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LayoutGrid, Mail, Lock, CheckCircle, X, Loader2 } from "lucide-react";
@@ -12,17 +12,49 @@ import {
 
 export default function LoginPage() {
   const router = useRouter();
+  const authReturnHandledRef = useRef(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showSuccess, setShowSuccess] = useState(false);
   const [showRegisteredNotice, setShowRegisteredNotice] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  /** Jetons d’invitation / magic link dans le # — souvent sur /login si la Site URL ou le mail pointe ici. */
+  const [authLinkHandoff, setAuthLinkHandoff] = useState(false);
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    const search = window.location.search;
+    const hash = window.location.hash;
+    const code = new URLSearchParams(search).get("code");
+    const hasImplicitSession =
+      Boolean(hash) &&
+      hash.includes("access_token") &&
+      hash.includes("refresh_token");
+
+    if (code || hasImplicitSession) {
+      authReturnHandledRef.current = true;
+      setAuthLinkHandoff(true);
+      router.replace(`/auth/callback${search}${hash}`);
+    }
+  }, [router]);
 
   useEffect(() => {
+    if (authReturnHandledRef.current) return;
+
     const params = new URLSearchParams(window.location.search);
+    const authErr = params.get("error");
+    if (authErr) {
+      try {
+        setSubmitError(decodeURIComponent(authErr.replace(/\+/g, " ")));
+      } catch {
+        setSubmitError(authErr);
+      }
+    }
     if (params.get("registered") === "1") {
       setShowRegisteredNotice(true);
+    }
+    if (authErr || params.get("registered") === "1") {
       window.history.replaceState({}, "", "/login");
     }
   }, []);
@@ -81,6 +113,17 @@ export default function LoginPage() {
       setIsSubmitting(false);
     }
   };
+
+  if (authLinkHandoff) {
+    return (
+      <div className="flex flex-col min-h-screen bg-[#f8fafc] items-center justify-center p-6">
+        <Loader2 className="h-10 w-10 text-indigo-600 animate-spin mb-4" />
+        <p className="text-sm font-medium text-gray-700 text-center">
+          Traitement du lien d’invitation…
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-indigo-50/50 via-white to-fuchsia-50/30 items-center justify-center p-4">

@@ -10,6 +10,12 @@ import type {
   OrganizationArticle,
   UpdateArticlePayload,
 } from "@/lib/types/article-orders";
+import type {
+  InviteMemberPayload,
+  OrganizationMember,
+  OrganizationMembersListResponse,
+  UpdateMemberPayload,
+} from "@/lib/types/organization-members";
 export { setStoredOrganizationId };
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -132,5 +138,30 @@ export async function cancelArticleOrder(orderId: string): Promise<unknown> {
   return request(`/article-orders/${orderId}/cancel`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+/** Membres d’organisation — admin / superviseur actif requis côté API. */
+export async function listOrganizationMembers(): Promise<OrganizationMember[]> {
+  const data = await request<OrganizationMembersListResponse>(`/members`);
+  return Array.isArray(data.members) ? data.members : [];
+}
+
+export async function inviteOrganizationMember(
+  body: InviteMemberPayload
+): Promise<unknown> {
+  return request(`/members/invite`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateOrganizationMember(
+  memberId: string,
+  body: UpdateMemberPayload
+): Promise<OrganizationMember> {
+  return request<OrganizationMember>(`/members/${memberId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
   });
 }
