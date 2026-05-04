@@ -13,6 +13,7 @@ import {
   Info,
   Loader2,
   RefreshCw,
+  Megaphone,
 } from "lucide-react";
 import { listArticles } from "@/lib/api/emall-client";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
@@ -114,6 +115,12 @@ export default function StockManagementPage() {
             className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
           >
             <FileEdit className="w-4 h-4" /> Brouillons
+          </Link>
+          <Link
+            href="/dashboard/stock/posts"
+            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
+          >
+            <Megaphone className="w-4 h-4" /> Posts vitrine
           </Link>
           <Link
             href="/dashboard/stock/new"

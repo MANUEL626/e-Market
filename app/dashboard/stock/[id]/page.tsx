@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Image as ImageIcon,
   Loader2,
+  Megaphone,
   Plus,
   Trash2,
   X,
@@ -469,6 +470,36 @@ export default function ProductInfoEditPage() {
                   <span className="text-xs font-semibold">Ajouter</span>
                 </label>
               </div>
+            </div>
+
+            <div className="rounded-[24px] border border-dashed border-indigo-200 bg-indigo-50/40 p-6 sm:p-8">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="shrink-0 rounded-xl bg-white p-2 text-indigo-700 shadow-sm">
+                    <Megaphone className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900">Posts vitrine</h2>
+                    <p className="mt-1 text-xs text-gray-600">
+                      Gérez les contenus promotionnels (jusqu’à 3 par article) sur une page dédiée pour une
+                      vue d’ensemble de tous les articles.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href={`/dashboard/stock/posts/${articleId}`}
+                  className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-[#3730A3] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#2e2889]"
+                >
+                  <Megaphone className="h-4 w-4" />
+                  Ouvrir l’éditeur de posts
+                </Link>
+              </div>
+              <p className="mt-4 text-[11px] text-gray-500">
+                <Link href="/dashboard/stock/posts" className="font-semibold text-indigo-700 hover:underline">
+                  Voir tous les articles
+                </Link>{" "}
+                — compteurs et accès rapide par produit.
+              </p>
             </div>
 
             <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">

@@ -10,6 +10,9 @@ import {
   Users,
   Mail,
   AlertCircle,
+  HeartHandshake,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { getPrimaryMembership } from "@/lib/api/member-me";
@@ -17,8 +20,14 @@ import { displayNameFromUser, initialsFromUser } from "@/lib/member-profile-stor
 import {
   inviteOrganizationMember,
   listOrganizationMembers,
+  listOrganizationSubscribers,
 } from "@/lib/api/emall-client";
 import type { OrganizationMember } from "@/lib/types/organization-members";
+import type { OrganizationSubscriber } from "@/lib/types/organization-subscribers";
+
+const SUBSCRIBERS_PAGE_SIZE = 20;
+
+type TeamTab = "members" | "subscribers";
 
 function memberTypeLabel(t: string): string {
   switch (t) {
@@ -44,6 +53,23 @@ function memberRoleLabel(r: string): string {
   }
 }
 
+function formatSubscribedAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("fr-FR", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function initialsFromUsername(username: string): string {
+  const t = username.trim();
+  if (!t) return "?";
+  return t.slice(0, 2).toUpperCase();
+}
+
 function canManageTeam(
   m: { member_type: string; activity_status: boolean } | undefined
 ): boolean {
@@ -55,10 +81,17 @@ export default function TeamPage() {
   const { profile, loading: profileLoading } = useMemberProfile();
   const primary = profile ? getPrimaryMembership(profile) : undefined;
   const manage = canManageTeam(primary);
+  const activeMember = Boolean(primary?.activity_status);
 
+  const [tab, setTab] = useState<TeamTab>("members");
   const [members, setMembers] = useState<OrganizationMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [subscribers, setSubscribers] = useState<OrganizationSubscriber[]>([]);
+  const [subsTotal, setSubsTotal] = useState(0);
+  const [subsOffset, setSubsOffset] = useState(0);
+  const [subsLoading, setSubsLoading] = useState(false);
+  const [subsError, setSubsError] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
@@ -88,6 +121,37 @@ export default function TeamPage() {
     if (profileLoading) return;
     void load();
   }, [profileLoading, load]);
+
+  const loadSubscribers = useCallback(async () => {
+    if (!activeMember) {
+      setSubscribers([]);
+      setSubsTotal(0);
+      return;
+    }
+    setSubsLoading(true);
+    setSubsError(null);
+    try {
+      const data = await listOrganizationSubscribers({
+        limit: SUBSCRIBERS_PAGE_SIZE,
+        offset: subsOffset,
+      });
+      setSubscribers(Array.isArray(data.items) ? data.items : []);
+      setSubsTotal(typeof data.total === "number" ? data.total : 0);
+    } catch (e) {
+      setSubsError(
+        e instanceof Error ? e.message : "Impossible de charger les abonnés."
+      );
+      setSubscribers([]);
+      setSubsTotal(0);
+    } finally {
+      setSubsLoading(false);
+    }
+  }, [activeMember, subsOffset]);
+
+  useEffect(() => {
+    if (profileLoading || tab !== "subscribers" || !activeMember) return;
+    void loadSubscribers();
+  }, [profileLoading, tab, activeMember, loadSubscribers]);
 
   async function submitInvite(e: React.FormEvent) {
     e.preventDefault();
@@ -121,7 +185,7 @@ export default function TeamPage() {
           Équipe
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Membres de votre organisation, rôles et accès (API e-Mall).
+          Membres internes, invitations, et clients qui suivent votre boutique.
         </p>
       </div>
 
@@ -138,20 +202,77 @@ export default function TeamPage() {
         </div>
       )}
 
-      {profile && !manage && (
+      {profile && activeMember && (
+        <div
+          className="flex gap-1 p-1 mb-8 rounded-2xl bg-gray-100/90 border border-gray-200/80 max-w-md"
+          role="tablist"
+          aria-label="Sections équipe"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "members"}
+            onClick={() => {
+              setTab("members");
+            }}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold transition ${
+              tab === "members"
+                ? "bg-white text-indigo-900 shadow-sm border border-gray-100"
+                : "text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            <Users className="w-4 h-4 shrink-0" />
+            Membres
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "subscribers"}
+            onClick={() => {
+              setTab("subscribers");
+              setSubsOffset(0);
+            }}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-bold transition ${
+              tab === "subscribers"
+                ? "bg-white text-indigo-900 shadow-sm border border-gray-100"
+                : "text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            <HeartHandshake className="w-4 h-4 shrink-0" />
+            Abonnés
+          </button>
+        </div>
+      )}
+
+      {profile && !activeMember && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900 mb-6 flex gap-3 items-start">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Compte membre inactif</p>
+            <p className="mt-1 text-amber-800/90">
+              Votre accès à cette organisation est désactivé. Contactez un administrateur.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {profile && !manage && tab === "members" && activeMember && (
         <div className="rounded-2xl border border-gray-200 bg-white px-4 py-4 text-sm text-gray-700 mb-6 flex gap-3 items-start">
           <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div>
             <p className="font-semibold text-gray-900">Accès réservé aux gestionnaires</p>
             <p className="text-gray-600 mt-1">
               Seuls les <strong>administrateurs</strong> et <strong>superviseurs</strong>{" "}
-              actifs peuvent consulter et gérer les membres de l’organisation.
+              actifs peuvent consulter et gérer les membres internes et envoyer des invitations.
+            </p>
+            <p className="text-gray-500 mt-2 text-xs">
+              Onglet <strong>Abonnés</strong> : liste des clients qui suivent la boutique (accessible à tout membre actif).
             </p>
           </div>
         </div>
       )}
 
-      {manage && (
+      {manage && tab === "members" && (
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
           <div>
             <h2 className="text-2xl font-extrabold text-gray-900">Membres</h2>
@@ -175,20 +296,20 @@ export default function TeamPage() {
         </div>
       )}
 
-      {manage && loading && (
+      {manage && tab === "members" && loading && (
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
           <Loader2 className="h-4 w-4 animate-spin" />
           Chargement des membres…
         </div>
       )}
 
-      {manage && error && (
+      {manage && tab === "members" && error && (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 mb-6">
           {error}
         </div>
       )}
 
-      {manage && !loading && !error && (
+      {manage && tab === "members" && !loading && !error && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {members.map((row) => {
             const u = row.user;
@@ -258,7 +379,7 @@ export default function TeamPage() {
         </div>
       )}
 
-      {manage && !loading && !error && members.length === 0 && (
+      {manage && tab === "members" && !loading && !error && members.length === 0 && (
         <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/80 px-6 py-12 text-center">
           <Users className="w-10 h-10 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-600 text-sm">
@@ -266,6 +387,122 @@ export default function TeamPage() {
             ajouter un collaborateur par e-mail.
           </p>
         </div>
+      )}
+
+      {profile && activeMember && tab === "subscribers" && (
+        <>
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
+            <div>
+              <h2 className="text-2xl font-extrabold text-gray-900">
+                Abonnés clients
+              </h2>
+              <p className="text-sm text-gray-500 mt-1 max-w-xl">
+                Comptes clients qui suivent votre organisation (abonnements actifs).
+                Tout membre actif peut consulter cette liste.
+              </p>
+            </div>
+            {!subsLoading && !subsError && subsTotal > 0 && (
+              <p className="text-sm font-bold text-indigo-900 tabular-nums">
+                {subsTotal} abonné{subsTotal > 1 ? "s" : ""}
+              </p>
+            )}
+          </div>
+
+          {subsLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Chargement des abonnés…
+            </div>
+          )}
+
+          {subsError && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 mb-6">
+              {subsError}
+            </div>
+          )}
+
+          {!subsLoading && !subsError && subscribers.length > 0 && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {subscribers.map((row) => (
+                  <div
+                    key={row.customer_id}
+                    className="bg-white p-6 rounded-[24px] shadow-sm border border-gray-100 flex flex-col"
+                  >
+                    <div className="flex items-start gap-4 mb-4">
+                      <div className="w-14 h-14 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-sm font-bold text-rose-700">
+                        {initialsFromUsername(row.username)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-lg font-bold text-gray-900 truncate">
+                          @{row.username}
+                        </h3>
+                        <p className="text-[10px] text-gray-400 font-mono truncate mt-0.5">
+                          {row.customer_id}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-600 mt-auto pt-2 border-t border-gray-50">
+                      <span className="text-gray-500">Abonné depuis · </span>
+                      {formatSubscribedAt(row.subscribed_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {subsTotal > SUBSCRIBERS_PAGE_SIZE && (
+                <div className="flex flex-wrap items-center justify-between gap-4 mt-8 pt-6 border-t border-gray-100">
+                  <p className="text-xs text-gray-500">
+                    Affichage{" "}
+                    <span className="font-semibold text-gray-700">
+                      {subsOffset + 1}–
+                      {Math.min(subsOffset + subscribers.length, subsTotal)}
+                    </span>{" "}
+                    sur {subsTotal}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={subsOffset === 0}
+                      onClick={() =>
+                        setSubsOffset((o) =>
+                          Math.max(0, o - SUBSCRIBERS_PAGE_SIZE)
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm font-bold text-gray-800 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none transition"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Précédent
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        subsOffset + SUBSCRIBERS_PAGE_SIZE >= subsTotal
+                      }
+                      onClick={() =>
+                        setSubsOffset((o) => o + SUBSCRIBERS_PAGE_SIZE)
+                      }
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm font-bold text-gray-800 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none transition"
+                    >
+                      Suivant
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {!subsLoading && !subsError && subscribers.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/80 px-6 py-12 text-center">
+              <HeartHandshake className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-600 text-sm max-w-md mx-auto">
+                Aucun client abonné pour l’instant. Lorsque des utilisateurs suivront
+                votre organisation, ils apparaîtront ici.
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {inviteOpen && (

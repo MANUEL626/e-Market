@@ -1,0 +1,31 @@
+<svg width="1024" height="1024" viewBox="0 0 280 280" xmlns="http://www.w3.org/2000/svg">
+  <title>e-mall icône application mobile — version violette</title>
+  <desc>Squircle violet avec sac shopping blanc et lettre e violette</desc>
+
+  <!-- Fond squircle -->
+  <rect width="280" height="280" rx="63" fill="#7B2FBE"/>
+
+  <!-- Corps du sac -->
+  <rect x="52" y="118" width="176" height="130" rx="14" fill="white"/>
+
+  <!-- Bande supérieure du sac -->
+  <rect x="52" y="118" width="176" height="22" rx="7" fill="#9B4FDE"/>
+  <rect x="52" y="130" width="176" height="10" fill="#9B4FDE"/>
+
+  <!-- Poignée gauche -->
+  <path d="M75,118 C75,68 145,68 145,118" fill="none" stroke="white" stroke-width="15" stroke-linecap="round"/>
+
+  <!-- Poignée droite -->
+  <path d="M135,118 C135,68 205,68 205,118" fill="none" stroke="white" stroke-width="15" stroke-linecap="round"/>
+
+  <!-- Lettre e -->
+  <text x="140" y="211"
+        font-family="-apple-system,'Helvetica Neue',Arial,sans-serif"
+        font-weight="900"
+        font-size="82"
+        fill="#7B2FBE"
+        text-anchor="middle">e</text>
+
+  <!-- Point signature -->
+  <circle cx="140" cy="238" r="6" fill="#7B2FBE"/>
+</svg>
