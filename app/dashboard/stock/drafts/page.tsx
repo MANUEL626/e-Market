@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { 
   Archive, 
@@ -120,7 +121,13 @@ export default function DraftsPage() {
            <div key={draft.id} className="bg-white rounded-[24px] p-6 shadow-sm border border-gray-100 flex gap-6 hover:shadow-md transition">
              {/* Image */}
              <div className="w-32 h-32 rounded-2xl overflow-hidden relative flex-shrink-0 border border-gray-100 shadow-inner">
-               <img src={draft.image} alt={draft.name} className="w-full h-full object-cover" />
+               <Image
+                 src={draft.image}
+                 alt={draft.name}
+                 fill
+                 className="object-cover"
+                 sizes="128px"
+               />
                <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/70 backdrop-blur-md rounded text-[9px] font-bold text-white tracking-wider">
                  {draft.category}
                </div>

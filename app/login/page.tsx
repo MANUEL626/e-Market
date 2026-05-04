@@ -105,9 +105,16 @@ export default function LoginPage() {
       }
 
       setShowSuccess(true);
+      const redirectToParam = new URLSearchParams(window.location.search).get(
+        "redirectTo"
+      );
+      const safeRedirectTarget =
+        redirectToParam && redirectToParam.startsWith("/")
+          ? redirectToParam
+          : "/dashboard";
       setTimeout(() => {
         setShowSuccess(false);
-        router.push("/dashboard");
+        router.push(safeRedirectTarget);
       }, 1500);
     } finally {
       setIsSubmitting(false);

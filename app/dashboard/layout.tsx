@@ -11,6 +11,7 @@ import {
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
 import {
   LayoutDashboard,
+  Megaphone,
   Package,
   LineChart,
   Users,
@@ -62,6 +63,14 @@ export default function DashboardLayout({
 
   const isActive = (path: string) => {
     if (path === "/dashboard" && pathname === "/dashboard") return true;
+    if (path === "/dashboard/stock/posts") {
+      return pathname.startsWith("/dashboard/stock/posts");
+    }
+    if (path === "/dashboard/stock") {
+      if (!pathname.startsWith("/dashboard/stock")) return false;
+      if (pathname.startsWith("/dashboard/stock/posts")) return false;
+      return true;
+    }
     if (path !== "/dashboard" && pathname.startsWith(path)) return true;
     return false;
   };
@@ -74,15 +83,15 @@ export default function DashboardLayout({
     }`;
 
   return (
-    <div className="flex h-screen bg-[#f8fafc]">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-gray-100 flex flex-col hidden md:flex">
-        <div className="p-6">
+    <div className="flex h-dvh min-h-0 w-full overflow-hidden bg-[#f8fafc]">
+      {/* Sidebar — shrink-0 + min-h-0 : ne participe pas au scroll du document */}
+      <aside className="hidden md:flex w-64 shrink-0 flex-col min-h-0 border-r border-gray-100 bg-white">
+        <div className="shrink-0 p-6">
           <h2 className="text-xl font-bold text-[#3730A3] tracking-tight line-clamp-2">{orgLabel}</h2>
           <p className="text-[10px] font-bold text-gray-400 tracking-widest mt-1 uppercase">Premium Merchant</p>
         </div>
 
-        <nav className="flex-1 px-4 py-4 space-y-1">
+        <nav className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4 space-y-1">
           <Link href="/dashboard" className={linkClass("/dashboard")}>
             <LayoutDashboard className="w-5 h-5" />
             Dashboard
@@ -90,6 +99,10 @@ export default function DashboardLayout({
           <Link href="/dashboard/stock" className={linkClass("/dashboard/stock")}>
             <Package className="w-5 h-5" />
             Stock
+          </Link>
+          <Link href="/dashboard/stock/posts" className={linkClass("/dashboard/stock/posts")}>
+            <Megaphone className="w-5 h-5" />
+            Posts vitrine
           </Link>
           <Link href="/dashboard/orders" className={linkClass("/dashboard/orders")}>
             <ClipboardList className="w-5 h-5" />
@@ -114,10 +127,10 @@ export default function DashboardLayout({
         </nav>
       </aside>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Main Content — min-h-0 indispensable pour un seul scroll interne (flex + overflow) */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="h-20 bg-white border-b border-gray-100 flex items-center justify-between px-8">
+        <header className="flex h-20 shrink-0 items-center justify-between border-b border-gray-100 bg-white px-8">
           <div className="flex-1 max-w-2xl relative">
             <Search className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
             <input 
@@ -145,8 +158,8 @@ export default function DashboardLayout({
           </div>
         </header>
 
-        {/* Page Content */}
-        <main className="flex-1 overflow-y-auto p-8">
+        {/* Page Content — seul conteneur de défilement vertical principal */}
+        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-6 sm:p-8">
           {children}
         </main>
       </div>

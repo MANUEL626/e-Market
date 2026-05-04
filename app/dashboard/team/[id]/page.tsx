@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ChevronRight,
   Loader2,
+  Mail,
   ShieldAlert,
 } from "lucide-react";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
@@ -245,6 +246,15 @@ export default function TeamMemberDetailPage() {
               </h2>
               <p className="text-sm text-gray-500 mt-1">{u.email}</p>
               <p className="text-xs text-gray-400 font-mono mt-1">{u.username}</p>
+              {profile && member.user_id !== profile.user.id && (
+                <Link
+                  href={`/dashboard/messages?with=${member.user_id}`}
+                  className="mt-5 inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-[#3730A3] text-white text-sm font-bold hover:bg-[#2e2889] transition w-full"
+                >
+                  <Mail className="w-4 h-4" />
+                  Message
+                </Link>
+              )}
             </div>
             <div className="bg-indigo-50/50 p-6 rounded-[24px] border border-indigo-100/50">
               <div className="flex items-center gap-2 text-indigo-700 font-bold mb-3">

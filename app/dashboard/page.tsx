@@ -1,17 +1,32 @@
 "use client";
 
-import { 
-  Banknote, 
-  ShoppingCart, 
-  Package, 
-  Zap, 
-  TrendingDown, 
+import dynamic from "next/dynamic";
+import {
   ArrowRight,
-  Plus,
+  Banknote,
+  Package,
   PenTool,
-  UserPlus
+  Plus,
+  ShoppingCart,
+  UserPlus,
+  Zap,
 } from "lucide-react";
-import { ResponsiveContainer, BarChart, Bar, XAxis, Tooltip, Cell } from "recharts";
+
+const OverviewSalesChart = dynamic(
+  () =>
+    import("@/components/charts/overview-sales-chart").then(
+      (m) => m.OverviewSalesChart
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="h-[240px] w-full min-h-[240px] rounded-xl bg-gray-50 animate-pulse"
+        aria-hidden
+      />
+    ),
+  }
+);
 
 const data = [
   { name: 'MON', value: 400 },
@@ -121,28 +136,7 @@ export default function DashboardPage() {
               </select>
             </div>
             
-            <div className="h-[240px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data} barSize={40}>
-                  <XAxis 
-                    dataKey="name" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#9ca3af', fontSize: 10, fontWeight: 700 }} 
-                    dy={10} 
-                  />
-                  <Tooltip 
-                    cursor={{ fill: '#f3f4f6' }}
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Bar dataKey="value" radius={[6, 6, 6, 6]}>
-                    {data.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={index === 4 ? '#4f46e5' : '#e0e7ff'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <OverviewSalesChart data={data} />
           </div>
 
           {/* Bottom Alerts Grid */}
