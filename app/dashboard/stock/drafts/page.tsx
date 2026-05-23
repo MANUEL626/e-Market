@@ -1,3 +1,6 @@
+"use client";
+
+import Image from "next/image";
 import Link from "next/link";
 import { 
   Archive, 
@@ -9,10 +12,16 @@ import {
   CheckCircle, 
   Trash2,
   FileBox,
-  ArrowLeft
+  ArrowLeft,
+  Loader2
 } from "lucide-react";
+import { AdminRequired } from "@/components/dashboard/admin-required";
+import { isAdminProfile } from "@/lib/authz";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 
 export default function DraftsPage() {
+  const { profile, loading } = useMemberProfile();
+  const isAdmin = isAdminProfile(profile);
   const drafts = [
     {
       id: "DRF-001",
@@ -47,6 +56,21 @@ export default function DraftsPage() {
       integrity: 30,
     }
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-24 text-gray-500">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Verification des droits...
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut acceder aux brouillons d'articles." />
+    );
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto pb-12">
@@ -120,7 +144,13 @@ export default function DraftsPage() {
            <div key={draft.id} className="bg-white rounded-[24px] p-6 shadow-sm border border-gray-100 flex gap-6 hover:shadow-md transition">
              {/* Image */}
              <div className="w-32 h-32 rounded-2xl overflow-hidden relative flex-shrink-0 border border-gray-100 shadow-inner">
-               <img src={draft.image} alt={draft.name} className="w-full h-full object-cover" />
+               <Image
+                 src={draft.image}
+                 alt={draft.name}
+                 fill
+                 className="object-cover"
+                 sizes="128px"
+               />
                <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/70 backdrop-blur-md rounded text-[9px] font-bold text-white tracking-wider">
                  {draft.category}
                </div>

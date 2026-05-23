@@ -1,273 +1,587 @@
+"use client";
+
 import Link from "next/link";
-import { 
-  ChevronRight, 
-  Bold, 
-  Italic, 
-  List, 
-  Link as LinkIcon, 
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ChevronRight,
   Image as ImageIcon,
-  Minus,
+  Loader2,
   Plus,
-  Eye,
-  Store,
-  X
+  Trash2,
+  X,
 } from "lucide-react";
+import { createArticle } from "@/lib/api/emall-client";
+import { getStoredOrganizationId } from "@/lib/organization-storage";
+import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
+import { AdminRequired } from "@/components/dashboard/admin-required";
+import { uploadOrganizationArticleImage } from "@/lib/supabase/upload-organization-article-image";
+import type { ArticleCategory, WholesalePriceTier } from "@/lib/types/article-orders";
+import { ARTICLE_CATEGORY_OPTIONS } from "@/lib/dashboard/article-categories";
+import {
+  newWholesaleRow,
+  parseWholesaleRowsToTiers,
+  type WholesaleFormRow,
+} from "@/lib/dashboard/article-wholesale-form";
+import { validateContiguousWholesaleTiers } from "@/lib/validation/wholesale-tiers";
+
+type LocalArticleImage = {
+  id: string;
+  file: File;
+  preview: string;
+};
 
 export default function NewProductPage() {
+  const router = useRouter();
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState<ArticleCategory>("other");
+  const [description, setDescription] = useState("");
+  const [unitSalePrice, setUnitSalePrice] = useState("");
+  const [stockQuantity, setStockQuantity] = useState("0");
+  const [alertQuantity, setAlertQuantity] = useState("0");
+  const [active, setActive] = useState(true);
+  /** Ordre = priorité : index 0 = image principale (obligatoire hors mock). */
+  const [articleImages, setArticleImages] = useState<LocalArticleImage[]>([]);
+  const articleImagesRef = useRef<LocalArticleImage[]>([]);
+  articleImagesRef.current = articleImages;
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** Une ligne vide par défaut pour rendre les paliers visibles (optionnel à remplir). */
+  const [wholesaleRows, setWholesaleRows] = useState<WholesaleFormRow[]>([newWholesaleRow()]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await loadMemberProfileForSession();
+        const allowed = isAdminProfile(profile);
+        const id = getStoredOrganizationId();
+        if (!cancelled) {
+          setIsAdmin(allowed);
+          setOrgId(id);
+          setAccessLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setAccessLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      articleImagesRef.current.forEach((item) => URL.revokeObjectURL(item.preview));
+    };
+  }, []);
+
+  const appendArticleImages = useCallback((fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    const accepted = Array.from(fileList).filter((f) => f.type.startsWith("image/"));
+    if (!accepted.length) return;
+    setArticleImages((prev) => [
+      ...prev,
+      ...accepted.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        preview: URL.createObjectURL(file),
+      })),
+    ]);
+    if (galleryInputRef.current) galleryInputRef.current.value = "";
+  }, []);
+
+  const removeArticleImage = useCallback((id: string) => {
+    setArticleImages((prev) => {
+      const item = prev.find((x) => x.id === id);
+      if (item) URL.revokeObjectURL(item.preview);
+      return prev.filter((x) => x.id !== id);
+    });
+  }, []);
+
+  const promoteToPrimary = useCallback((id: string) => {
+    setArticleImages((prev) => {
+      const idx = prev.findIndex((x) => x.id === id);
+      if (idx <= 0) return prev;
+      const next = [...prev];
+      const [item] = next.splice(idx, 1);
+      return [item, ...next];
+    });
+  }, []);
+
+  const parseNonNegativeNumber = (raw: string, fallback: number) => {
+    const n = Number.parseFloat(String(raw).replace(",", "."));
+    if (Number.isNaN(n) || n < 0) return fallback;
+    return n;
+  };
+
+  const parseIntNonNegative = (raw: string, fallback: number) => {
+    const n = Number.parseInt(String(raw).replace(/\s/g, ""), 10);
+    if (Number.isNaN(n) || n < 0) return fallback;
+    return n;
+  };
+
+  function addWholesaleRow() {
+    setWholesaleRows((r) => [...r, newWholesaleRow()]);
+  }
+
+  function removeWholesaleRow(id: string) {
+    setWholesaleRows((r) => {
+      if (r.length <= 1) return [newWholesaleRow()];
+      return r.filter((x) => x.id !== id);
+    });
+  }
+
+  function updateWholesaleRow(id: string, patch: Partial<Omit<WholesaleFormRow, "id">>) {
+    setWholesaleRows((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, ...patch } : row))
+    );
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError("Indiquez un nom d’article.");
+      return;
+    }
+    if (!orgId) {
+      setError("Organisation introuvable. Reconnectez-vous ou rechargez la page.");
+      return;
+    }
+    if (articleImages.length === 0) {
+      setError("Ajoutez au moins une image (la première sert d’image principale).");
+      return;
+    }
+
+    const price = parseNonNegativeNumber(unitSalePrice, NaN);
+    if (Number.isNaN(price)) {
+      setError("Prix de vente invalide.");
+      return;
+    }
+
+    const stock = parseIntNonNegative(stockQuantity, 0);
+    const alert = parseIntNonNegative(alertQuantity, 0);
+
+    let wholesale_prices: WholesalePriceTier[] | undefined;
+    try {
+      const raw = parseWholesaleRowsToTiers(wholesaleRows);
+      wholesale_prices = raw
+        ? validateContiguousWholesaleTiers(raw)
+        : undefined;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Paliers invalides.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      let primaryPath: string;
+      const additionalPaths: string[] = [];
+
+      const [first, ...rest] = articleImages;
+      primaryPath = await uploadOrganizationArticleImage(orgId, first.file);
+      for (const item of rest) {
+        additionalPaths.push(await uploadOrganizationArticleImage(orgId, item.file));
+      }
+
+      const created = await createArticle({
+        name: trimmedName,
+        category,
+        unit_sale_price: price,
+        ...(wholesale_prices ? { wholesale_prices } : {}),
+        stock_quantity: stock,
+        alert_quantity: alert,
+        description: description.trim() || null,
+        primary_image_storage_path: primaryPath,
+        additional_image_storage_paths: additionalPaths,
+        active,
+      });
+
+      router.push(`/dashboard/stock/${created.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Création impossible.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (accessLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-24 text-gray-500">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Verification des droits...
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut ajouter un article au stock." />
+    );
+  }
+
   return (
     <div className="max-w-[1200px] mx-auto pb-12">
-      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <nav className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-            <Link href="/dashboard/stock" className="hover:text-gray-900 transition">Stock</Link>
+            <Link href="/dashboard/stock" className="hover:text-gray-900 transition">
+              Stock
+            </Link>
             <ChevronRight className="w-4 h-4" />
-            <span className="text-gray-900 font-medium">New Product</span>
+            <span className="text-gray-900 font-medium">Nouvel article</span>
           </nav>
-          <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Add New Product</h1>
-            <span className="px-3 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full">Draft</span>
-          </div>
+          <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">
+            Ajouter un article
+          </h1>
+          <p className="text-sm text-gray-500 mt-2 max-w-xl">
+            Création via l’API e-Mall : image(s) dans Supabase Storage (
+            <code className="text-xs bg-gray-100 px-1 rounded">organization-articles</code>
+            ), puis <code className="text-xs bg-gray-100 px-1 rounded">POST …/articles</code>.
+          </p>
         </div>
         <div className="flex items-center gap-3">
-          <Link href="/dashboard/stock" className="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm">
-            Cancel
+          <Link
+            href="/dashboard/stock"
+            className="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
+          >
+            Annuler
           </Link>
-          <button className="px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] text-white text-sm font-semibold rounded-full transition shadow-sm">
-            Save Changes
+          <button
+            type="submit"
+            form="new-article-form"
+            disabled={submitting || !orgId}
+            className="inline-flex items-center justify-center gap-2 px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-60 text-white text-sm font-semibold rounded-full transition shadow-sm"
+          >
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Enregistrement…
+              </>
+            ) : (
+              "Enregistrer l’article"
+            )}
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Column */}
-        <div className="lg:col-span-2 space-y-8">
-          
-          {/* Basic Information */}
-          <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-900 mb-6">Basic Information</h2>
-            
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm text-gray-700 mb-2">Product Title</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. Minimalist Watch" 
-                  className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-700 mb-2">Description</label>
-                <div className="bg-gray-50 border border-transparent focus-within:bg-white focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 rounded-xl overflow-hidden transition">
-                  {/* Mock Toolbar */}
-                  <div className="flex items-center gap-1 border-b border-gray-100 p-2 bg-white">
-                    <button className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded transition"><Bold className="w-4 h-4" /></button>
-                    <button className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded transition"><Italic className="w-4 h-4" /></button>
-                    <button className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded transition"><List className="w-4 h-4" /></button>
-                    <button className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded transition"><LinkIcon className="w-4 h-4" /></button>
-                  </div>
-                  <textarea 
-                    rows={5} 
-                    placeholder="Describe your product..."
-                    className="w-full bg-transparent border-none py-3 px-4 text-sm focus:outline-none resize-none"
-                  ></textarea>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Media */}
-          <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-gray-900">Media</h2>
-              <button className="text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition">Add via URL</button>
-            </div>
-            
-            <div className="flex gap-4 overflow-x-auto pb-2">
-              <button className="w-32 h-32 flex-shrink-0 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition">
-                <ImageIcon className="w-6 h-6" />
-                <span className="text-xs font-medium">Add File</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Inventory */}
-          <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-gray-900">Inventory</h2>
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-500">Track quantity</span>
-                <div className="w-10 h-6 bg-indigo-600 rounded-full relative cursor-pointer">
-                  <div className="w-5 h-5 bg-white rounded-full absolute top-0.5 right-0.5 shadow-sm"></div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-               <div>
-                  <label className="block text-sm text-gray-700 mb-2">SKU (Stock Keeping Unit)</label>
-                  <input 
-                    type="text" 
-                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                  />
-               </div>
-               <div>
-                  <label className="block text-sm text-gray-700 mb-2">Barcode (ISBN, UPC, GTIN)</label>
-                  <input 
-                    type="text" 
-                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                  />
-               </div>
-            </div>
-
-            <h3 className="text-[10px] font-bold text-gray-500 tracking-widest uppercase mb-4">Quantity Available</h3>
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
-               <span className="text-sm font-medium text-gray-900">Central Warehouse</span>
-               <div className="flex items-center gap-4">
-                 <button className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 text-gray-500 hover:text-gray-900 rounded-lg shadow-sm">
-                   <Minus className="w-3 h-3" />
-                 </button>
-                 <span className="w-8 text-center font-bold text-gray-900">0</span>
-                 <button className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 text-gray-500 hover:text-gray-900 rounded-lg shadow-sm">
-                   <Plus className="w-3 h-3" />
-                 </button>
-               </div>
-            </div>
-          </div>
+      {error && (
+        <div
+          className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"
+          role="alert"
+        >
+          {error}
         </div>
+      )}
 
-        {/* Right Column */}
-        <div className="space-y-8">
-          
-          {/* Pricing */}
-          <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-900 mb-6">Pricing</h2>
-            
-            <div className="space-y-6">
-              <div>
-                 <label className="block text-sm text-gray-700 mb-2">Price</label>
-                 <div className="relative">
-                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-medium">$</span>
-                   <input 
-                     type="text" 
-                     placeholder="0.00"
-                     className="w-full bg-gray-50 border border-transparent rounded-xl py-3 pl-8 pr-4 text-sm font-bold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-                   />
-                 </div>
-              </div>
-              
-              <div>
-                 <label className="block text-sm text-gray-700 mb-2">Compare at price</label>
-                 <div className="relative">
-                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">$</span>
-                   <input 
-                     type="text" 
-                     placeholder="0.00"
-                     className="w-full bg-gray-50 border border-transparent rounded-xl py-3 pl-8 pr-4 text-sm font-medium text-gray-400 focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition italic"
-                   />
-                 </div>
-              </div>
+      {!orgId && (
+        <p className="mb-6 text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+          Chargement de l’organisation… Si le message persiste, ouvrez une session membre et
+          rechargez le tableau de bord.
+        </p>
+      )}
 
-              <div className="pt-4 border-t border-gray-100">
-                 <div className="flex items-center justify-between mb-4">
-                    <span className="text-sm text-gray-500">Cost per item</span>
-                    <a href="#" className="text-sm font-semibold text-indigo-600 hover:text-indigo-800">$0.00</a>
-                 </div>
-                 
-                 <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">
-                       <div className="text-[10px] font-bold text-gray-400 tracking-widest uppercase mb-1">Margin</div>
-                       <div className="font-bold text-gray-900">—</div>
-                    </div>
-                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">
-                       <div className="text-[10px] font-bold text-gray-400 tracking-widest uppercase mb-1">Profit</div>
-                       <div className="font-bold text-gray-900">—</div>
-                    </div>
-                 </div>
+      <form id="new-article-form" onSubmit={handleSubmit}>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 space-y-8">
+            <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
+              <h2 className="text-lg font-bold text-gray-900 mb-6">Informations</h2>
+              <div className="space-y-6">
+                <div>
+                  <label htmlFor="article-name" className="block text-sm text-gray-700 mb-2">
+                    Nom de l’article <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    id="article-name"
+                    type="text"
+                    required
+                    maxLength={500}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Ex. Casque audio"
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="article-desc" className="block text-sm text-gray-700 mb-2">
+                    Description
+                  </label>
+                  <textarea
+                    id="article-desc"
+                    rows={5}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Détails, caractéristiques…"
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition resize-none"
+                  />
+                </div>
               </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
+              <div className="flex items-center justify-between gap-4 mb-2">
+                <h2 className="text-lg font-bold text-gray-900">Médias</h2>
+                <span className="text-xs text-gray-400 hidden sm:inline">
+                  Plusieurs fichiers possibles ·{" "}
+                  <span className="text-rose-600 font-semibold">1 image min.</span>
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mb-6">
+                La <strong>première</strong> vignette est l’image principale (
+                <code className="bg-gray-100 px-1 rounded text-[11px]">primary_image_storage_path</code>
+                ). Les suivantes sont des images additionnelles. Chemin Storage :{" "}
+                <strong>{orgId ?? "…"}</strong>/fichier.
+              </p>
+
+              <input
+                ref={galleryInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="sr-only"
+                id="article-gallery-input"
+                onChange={(e) => appendArticleImages(e.target.files)}
+              />
+
+              <div className="flex gap-4 overflow-x-auto pb-2 snap-x snap-mandatory">
+                {articleImages.map((item, index) => (
+                  <div
+                    key={item.id}
+                    className="relative shrink-0 w-[120px] h-[120px] rounded-2xl overflow-hidden border border-gray-200 bg-gray-100 shadow-sm snap-start group"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- aperçu blob local */}
+                    <img
+                      src={item.preview}
+                      alt={item.file.name}
+                      className="w-full h-full object-cover"
+                    />
+                    {index === 0 && (
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#3730A3] text-white text-[10px] font-bold uppercase tracking-wide shadow">
+                        Principale
+                      </span>
+                    )}
+                    {index > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => promoteToPrimary(item.id)}
+                        className="absolute bottom-2 left-2 right-2 py-1 rounded-md bg-white/95 text-[9px] font-bold text-indigo-700 shadow border border-indigo-100 hover:bg-indigo-50 leading-tight"
+                        title={item.file.name}
+                      >
+                        Couverture
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeArticleImage(item.id)}
+                      className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-lg bg-black/55 text-white sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100 opacity-100 transition hover:bg-black/75"
+                      aria-label={`Retirer ${item.file.name}`}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+
+                <label
+                  htmlFor="article-gallery-input"
+                  className="shrink-0 flex flex-col items-center justify-center gap-2 w-[120px] h-[120px] rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 text-gray-400 hover:bg-gray-100 hover:border-indigo-200 hover:text-indigo-600 cursor-pointer transition snap-start"
+                >
+                  <ImageIcon className="w-7 h-7" />
+                  <span className="text-xs font-semibold">Ajouter</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
+              <h2 className="text-lg font-bold text-gray-900 mb-6">Stock</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div>
+                  <label htmlFor="stock-qty" className="block text-sm text-gray-700 mb-2">
+                    Quantité en stock
+                  </label>
+                  <input
+                    id="stock-qty"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={stockQuantity}
+                    onChange={(e) => setStockQuantity(e.target.value)}
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="alert-qty" className="block text-sm text-gray-700 mb-2">
+                    Seuil d’alerte (stock bas)
+                  </label>
+                  <input
+                    id="alert-qty"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={alertQuantity}
+                    onChange={(e) => setAlertQuantity(e.target.value)}
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-4">
+                Le statut <code className="bg-gray-100 px-1 rounded">stock_status</code> est calculé
+                côté API (in_stock / low_stock / out_of_stock).
+              </p>
             </div>
           </div>
 
-          {/* Organization */}
-          <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-900 mb-6">Organization</h2>
-            
-            <div className="space-y-6">
-               <div>
-                  <label className="block text-sm text-gray-700 mb-2">Category</label>
-                  <select className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition cursor-pointer appearance-none">
-                     <option value="">Select category...</option>
+          <div className="space-y-8">
+            <div className="bg-white p-8 rounded-[24px] shadow-sm border border-gray-100">
+              <h2 className="text-lg font-bold text-gray-900 mb-6">Prix &amp; catégorie</h2>
+              <div className="space-y-6">
+                <div>
+                  <label htmlFor="unit-price" className="block text-sm text-gray-700 mb-2">
+                    Prix de vente unitaire <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    id="unit-price"
+                    type="text"
+                    inputMode="decimal"
+                    required
+                    value={unitSalePrice}
+                    onChange={(e) => setUnitSalePrice(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  />
+                </div>
+
+                <div className="pt-2 border-t border-gray-100">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-gray-900">
+                        Prix de vente en lot (gros)
+                      </h3>
+                      <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                        Optionnel. Le premier palier commence à <strong>1</strong> ; chaque palier se termine juste avant le
+                        suivant (ex. 1–15 puis 16–25). Pas de trou ni de chevauchement. Avec <strong>plusieurs</strong>{" "}
+                        paliers, seul le <strong>dernier</strong> peut avoir une quantité max. vide (sans plafond).
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addWholesaleRow}
+                      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Palier
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {wholesaleRows.map((row) => (
+                      <div
+                        key={row.id}
+                        className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end p-3 rounded-xl bg-gray-50 border border-gray-100"
+                      >
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                            Qté min. <span className="text-rose-600">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={row.minQty}
+                            onChange={(e) => updateWholesaleRow(row.id, { minQty: e.target.value })}
+                            placeholder="ex. 10"
+                            className="w-full bg-white border border-gray-200 rounded-lg py-2 px-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                            Qté max.
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={row.maxQty}
+                            onChange={(e) => updateWholesaleRow(row.id, { maxQty: e.target.value })}
+                            placeholder="vide = sans plafond"
+                            className="w-full bg-white border border-gray-200 rounded-lg py-2 px-3 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                            Prix unitaire <span className="text-rose-600">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={row.unitPrice}
+                            onChange={(e) => updateWholesaleRow(row.id, { unitPrice: e.target.value })}
+                            placeholder="ex. 9,50"
+                            className="w-full bg-white border border-gray-200 rounded-lg py-2 px-3 text-sm font-medium focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                        <div className="flex justify-end sm:justify-center pb-0.5">
+                          <button
+                            type="button"
+                            onClick={() => removeWholesaleRow(row.id)}
+                            title={
+                              wholesaleRows.length <= 1
+                                ? "Effacer la ligne"
+                                : "Supprimer ce palier"
+                            }
+                            className="p-2 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-3">
+                    Laissez une ligne entièrement vide pour ne pas l’envoyer. Avec un seul palier, la quantité max. est
+                    optionnelle ; à partir de deux paliers, seul le dernier peut être sans max. (illimité).
+                  </p>
+                </div>
+
+                <div>
+                  <label htmlFor="article-category" className="block text-sm text-gray-700 mb-2">
+                    Catégorie <span className="text-rose-600">*</span>
+                  </label>
+                  <select
+                    id="article-category"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value as ArticleCategory)}
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition cursor-pointer"
+                  >
+                    {ARTICLE_CATEGORY_OPTIONS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
                   </select>
-               </div>
-               
-               <div>
-                  <label className="block text-sm text-gray-700 mb-2">Vendor</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Indigo Premium Goods"
-                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                </div>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={(e) => setActive(e.target.checked)}
+                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                   />
-               </div>
-
-               <div>
-                  <label className="block text-sm text-gray-700 mb-2">Collections</label>
-                  <input 
-                    type="text" 
-                    placeholder="Search collections..."
-                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition mb-3"
-                  />
-                  {/* Mock Collection Tag */}
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-semibold">
-                    Summer 2024 Collection <button className="hover:text-indigo-900"><X className="w-3 h-3" /></button>
-                  </div>
-               </div>
-
-               <div>
-                  <label className="block text-sm text-gray-700 mb-2">Tags</label>
-                  <input 
-                    type="text" 
-                    placeholder="Add tags separated by comma"
-                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition mb-3"
-                  />
-                  {/* Mock Tags */}
-                  <div className="flex flex-wrap gap-2">
-                    <div className="inline-flex px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">minimalist</div>
-                    <div className="inline-flex px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">watch</div>
-                  </div>
-               </div>
+                  <span className="text-sm text-gray-700">Article actif (visible dans le catalogue)</span>
+                </label>
+              </div>
             </div>
           </div>
-
-          {/* Product Availability */}
-          <div className="bg-gray-50 p-6 rounded-[24px] border border-gray-100 border-dashed">
-             <h3 className="text-xs font-bold text-gray-900 mb-4">Product Availability</h3>
-             
-             <div className="space-y-4">
-                <div className="flex gap-4 items-start">
-                   <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 flex-shrink-0 mt-1">
-                     <Eye className="w-4 h-4" />
-                   </div>
-                   <div>
-                     <div className="text-sm font-bold text-gray-900">Online Store</div>
-                     <div className="text-xs text-gray-500">Visible to all customers</div>
-                   </div>
-                </div>
-                
-                <div className="flex gap-4 items-start">
-                   <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-500 flex-shrink-0 mt-1">
-                     <Store className="w-4 h-4" />
-                   </div>
-                   <div>
-                     <div className="text-sm font-bold text-gray-900 line-through text-opacity-50">Point of Sale</div>
-                     <div className="text-xs text-gray-400">Unavailable in physical stores</div>
-                   </div>
-                </div>
-             </div>
-          </div>
-
         </div>
-      </div>
+      </form>
     </div>
   );
 }

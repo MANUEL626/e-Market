@@ -1,17 +1,35 @@
 "use client";
 
-import { 
-  Banknote, 
-  ShoppingCart, 
-  Package, 
-  Zap, 
-  TrendingDown, 
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import {
   ArrowRight,
-  Plus,
+  Banknote,
+  Package,
   PenTool,
-  UserPlus
+  Plus,
+  ShoppingCart,
+  UserPlus,
+  Zap,
 } from "lucide-react";
-import { ResponsiveContainer, BarChart, Bar, XAxis, Tooltip, Cell } from "recharts";
+import { isAdminProfile } from "@/lib/authz";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+
+const OverviewSalesChart = dynamic(
+  () =>
+    import("@/components/charts/overview-sales-chart").then(
+      (m) => m.OverviewSalesChart
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="h-[240px] w-full min-h-[240px] rounded-xl bg-gray-50 animate-pulse"
+        aria-hidden
+      />
+    ),
+  }
+);
 
 const data = [
   { name: 'MON', value: 400 },
@@ -24,6 +42,9 @@ const data = [
 ];
 
 export default function DashboardPage() {
+  const { profile } = useMemberProfile();
+  const isAdmin = isAdminProfile(profile);
+
   return (
     <div className="max-w-[1200px] mx-auto">
       <div className="mb-8">
@@ -121,28 +142,7 @@ export default function DashboardPage() {
               </select>
             </div>
             
-            <div className="h-[240px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data} barSize={40}>
-                  <XAxis 
-                    dataKey="name" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#9ca3af', fontSize: 10, fontWeight: 700 }} 
-                    dy={10} 
-                  />
-                  <Tooltip 
-                    cursor={{ fill: '#f3f4f6' }}
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Bar dataKey="value" radius={[6, 6, 6, 6]}>
-                    {data.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={index === 4 ? '#4f46e5' : '#e0e7ff'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <OverviewSalesChart data={data} />
           </div>
 
           {/* Bottom Alerts Grid */}
@@ -172,18 +172,35 @@ export default function DashboardPage() {
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100">
             <h3 className="text-xs font-bold text-gray-400 tracking-widest uppercase mb-6">Quick Actions</h3>
             <div className="space-y-3">
-              <button className="w-full flex items-center justify-between p-4 bg-[#3730A3] hover:bg-[#2e2889] text-white rounded-2xl transition">
-                <span className="text-sm font-bold">Add New Product</span>
-                <Plus className="w-5 h-5 text-indigo-200" />
-              </button>
-              <button className="w-full flex items-center justify-between p-4 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-2xl transition">
-                <span className="text-sm font-bold">Create New Draft</span>
-                <PenTool className="w-5 h-5 text-gray-400" />
-              </button>
-              <button className="w-full flex items-center justify-between p-4 bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 rounded-2xl transition">
-                <span className="text-sm font-bold">Invite Member</span>
-                <UserPlus className="w-5 h-5 text-gray-400" />
-              </button>
+              {isAdmin ? (
+                <>
+                  <Link
+                    href="/dashboard/stock/new"
+                    className="w-full flex items-center justify-between p-4 bg-[#3730A3] hover:bg-[#2e2889] text-white rounded-2xl transition"
+                  >
+                    <span className="text-sm font-bold">Add New Product</span>
+                    <Plus className="w-5 h-5 text-indigo-200" />
+                  </Link>
+                  <Link
+                    href="/dashboard/stock/drafts"
+                    className="w-full flex items-center justify-between p-4 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-2xl transition"
+                  >
+                    <span className="text-sm font-bold">Create New Draft</span>
+                    <PenTool className="w-5 h-5 text-gray-400" />
+                  </Link>
+                  <Link
+                    href="/dashboard/team/new"
+                    className="w-full flex items-center justify-between p-4 bg-white border border-gray-200 hover:bg-gray-50 text-gray-900 rounded-2xl transition"
+                  >
+                    <span className="text-sm font-bold">Invite Member</span>
+                    <UserPlus className="w-5 h-5 text-gray-400" />
+                  </Link>
+                </>
+              ) : (
+                <p className="rounded-2xl bg-gray-50 px-4 py-5 text-sm text-gray-500">
+                  Les actions de gestion sont reservees aux administrateurs.
+                </p>
+              )}
             </div>
           </div>
 
