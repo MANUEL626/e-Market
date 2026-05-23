@@ -15,10 +15,13 @@ import {
 } from "lucide-react";
 import { performClientLogout } from "@/lib/auth/logout-client";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { getPrimaryMembership } from "@/lib/api/member-me";
 import {
   displayNameFromUser,
   initialsFromUser,
 } from "@/lib/member-profile-storage";
+import { getAvatarPublicUrl } from "@/lib/supabase/avatar-url";
+import { translate } from "@/lib/i18n";
 
 export default function SettingsLayout({
   children,
@@ -30,9 +33,14 @@ export default function SettingsLayout({
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const headerUser = profile?.user;
   const headerName = headerUser ? displayNameFromUser(headerUser) : null;
   const headerInitials = headerUser ? initialsFromUser(headerUser) : "?";
+  const headerAvatarUrl = getAvatarPublicUrl(headerUser?.profile_picture);
+  const organization = profile ? getPrimaryMembership(profile)?.organization : null;
+  const organizationName = organization?.name ?? "Indigo Marketplace";
+  const organizationAvatarUrl = getAvatarPublicUrl(organization?.profile_picture);
 
   useEffect(() => {
     if (!logoutConfirmOpen) return;
@@ -56,9 +64,9 @@ export default function SettingsLayout({
   }
 
   const navLinks = [
-    { name: "Général", path: "/settings/general", icon: Building2 },
-    { name: "Profil", path: "/settings/profile", icon: User },
-    { name: "Facturation", path: "/settings/billing", icon: CreditCard },
+    { name: t("general"), path: "/settings/general", icon: Building2 },
+    { name: t("profile"), path: "/settings/profile", icon: User },
+    { name: t("billing"), path: "/settings/billing", icon: CreditCard },
   ];
 
   return (
@@ -85,10 +93,10 @@ export default function SettingsLayout({
               id="logout-dialog-title"
               className="text-lg font-extrabold text-gray-900"
             >
-              Sign out?
+              {t("signOutQuestion")}
             </h2>
             <p className="mt-2 text-sm text-gray-500">
-              You will need to sign in again to access your workspace.
+              {t("signOutText")}
             </p>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
@@ -97,7 +105,7 @@ export default function SettingsLayout({
                 onClick={() => setLogoutConfirmOpen(false)}
                 className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
               >
-                Cancel
+                {t("cancel")}
               </button>
               <button
                 type="button"
@@ -108,7 +116,7 @@ export default function SettingsLayout({
                 {loggingOut && (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
                 )}
-                {loggingOut ? "Signing out…" : "Sign out"}
+                {loggingOut ? t("signingOut") : t("signOut")}
               </button>
             </div>
           </div>
@@ -118,13 +126,21 @@ export default function SettingsLayout({
       {/* Top Navigation */}
       <header className="h-16 bg-white border-b border-gray-100 flex items-center justify-between px-8 shrink-0 z-10">
         <div className="flex items-center gap-8">
-          <Link href="/dashboard" className="text-xl font-extrabold text-[#3730A3] tracking-tight">
-            Indigo Marketplace
+          <Link href="/dashboard" className="flex items-center gap-3 text-xl font-extrabold text-[#3730A3] tracking-tight">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-700">
+              {organizationAvatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={organizationAvatarUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                organizationName.slice(0, 2).toUpperCase()
+              )}
+            </span>
+            <span className="max-w-[260px] truncate">{organizationName}</span>
           </Link>
           <nav className="hidden md:flex items-center gap-6">
-            <Link href="/dashboard" className="text-sm font-medium text-gray-500 hover:text-gray-900 transition">Dashboard</Link>
-            <Link href="/dashboard/stock" className="text-sm font-medium text-gray-500 hover:text-gray-900 transition">Inventory</Link>
-            <Link href="/dashboard/sales" className="text-sm font-medium text-gray-500 hover:text-gray-900 transition">Sales</Link>
+            <Link href="/dashboard" className="text-sm font-medium text-gray-500 hover:text-gray-900 transition">{t("dashboard")}</Link>
+            <Link href="/dashboard/stock" className="text-sm font-medium text-gray-500 hover:text-gray-900 transition">{t("stock")}</Link>
+            <Link href="/dashboard/sales" className="text-sm font-medium text-gray-500 hover:text-gray-900 transition">{t("sales")}</Link>
           </nav>
         </div>
         <div className="flex items-center gap-5">
@@ -136,12 +152,13 @@ export default function SettingsLayout({
           <Link
             href="/settings/profile"
             className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 shadow-sm ml-2 bg-indigo-100 flex items-center justify-center shrink-0"
-            title={headerName ?? "Profil"}
+            title={headerName ?? t("profile")}
           >
-            {headerUser?.profile_picture ? (
+            {headerAvatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={headerUser.profile_picture}
-                alt={headerName ?? "Profil"}
+                src={headerAvatarUrl}
+                alt={headerName ?? t("profile")}
                 className="w-full h-full object-cover"
               />
             ) : (
@@ -157,10 +174,15 @@ export default function SettingsLayout({
         <aside className="w-[260px] bg-white border-r border-gray-100 flex flex-col hidden md:flex shrink-0 overflow-y-auto">
           <div className="p-6">
             <div className="flex items-center gap-3 mb-1">
-               <div className="w-8 h-8 bg-[#3730A3] text-white rounded-lg flex items-center justify-center shadow-sm">
-                  <Building2 className="w-4 h-4" />
+               <div className="w-8 h-8 bg-[#3730A3] text-white rounded-lg flex items-center justify-center shadow-sm overflow-hidden">
+                  {organizationAvatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={organizationAvatarUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Building2 className="w-4 h-4" />
+                  )}
                </div>
-               <h2 className="text-lg font-extrabold text-gray-900">Settings</h2>
+               <h2 className="text-lg font-extrabold text-gray-900 truncate">{organizationName}</h2>
             </div>
             <p className="text-[10px] font-extrabold text-gray-400 tracking-widest uppercase mt-1 pl-11">Manage workspace</p>
           </div>
@@ -181,15 +203,15 @@ export default function SettingsLayout({
           <div className="p-4 border-t border-gray-50 mt-auto">
              <div className="bg-[#3730A3] rounded-[16px] p-5 text-center shadow-md relative overflow-hidden mb-4">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
-                <h4 className="text-xs font-bold text-white mb-3">Need more power?</h4>
-                <button className="w-full py-2 bg-white text-[#3730A3] text-xs font-extrabold rounded-xl shadow-sm hover:bg-gray-50 transition">Upgrade Plan</button>
+                <h4 className="text-xs font-bold text-white mb-3">{t("morePower")}</h4>
+                <button className="w-full py-2 bg-white text-[#3730A3] text-xs font-extrabold rounded-xl shadow-sm hover:bg-gray-50 transition">{t("upgradePlan")}</button>
              </div>
              
              <button className="flex items-center gap-3 px-4 py-2 w-full text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-xl transition">
-               <BookOpen className="w-4 h-4" /> Documentation
+               <BookOpen className="w-4 h-4" /> {t("documentation")}
              </button>
              <button className="flex items-center gap-3 px-4 py-2 w-full text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-xl transition">
-               <HelpCircle className="w-4 h-4" /> Support
+               <HelpCircle className="w-4 h-4" /> {t("support")}
              </button>
              <button
                type="button"
@@ -198,7 +220,7 @@ export default function SettingsLayout({
                className="flex items-center gap-3 px-4 py-2 w-full text-sm font-medium text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition mt-2 border-t border-gray-50 pt-3 disabled:opacity-60 disabled:pointer-events-none"
              >
                <LogOut className="w-4 h-4 shrink-0" />
-               Logout
+               {t("logout")}
              </button>
           </div>
         </aside>

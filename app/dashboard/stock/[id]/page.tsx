@@ -22,10 +22,14 @@ import {
 } from "@/lib/dashboard/article-wholesale-form";
 import { getStoredOrganizationId } from "@/lib/organization-storage";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
+import { AdminRequired } from "@/components/dashboard/admin-required";
 import { uploadOrganizationArticleImage } from "@/lib/supabase/upload-organization-article-image";
 import { getOrganizationArticleSignedUrl } from "@/lib/supabase/organization-article-image-url";
 import type { ArticleCategory, WholesalePriceTier } from "@/lib/types/article-orders";
 import { validateContiguousWholesaleTiers } from "@/lib/validation/wholesale-tiers";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { translate } from "@/lib/i18n";
 
 type GalleryRemote = {
   id: string;
@@ -42,11 +46,15 @@ type GalleryLocal = {
 type GalleryItem = GalleryRemote | GalleryLocal;
 
 export default function ProductInfoEditPage() {
+  const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const params = useParams();
   const router = useRouter();
   const articleId = typeof params.id === "string" ? params.id : "";
 
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -77,12 +85,20 @@ export default function ProductInfoEditPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let id = getStoredOrganizationId();
-      if (!id) {
-        await loadMemberProfileForSession();
-        id = getStoredOrganizationId();
+      try {
+        const profile = await loadMemberProfileForSession();
+        const id = getStoredOrganizationId();
+        if (!cancelled) {
+          setIsAdmin(isAdminProfile(profile));
+          setOrgId(id);
+          setAccessLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setAccessLoading(false);
+        }
       }
-      if (!cancelled) setOrgId(id);
     })();
     return () => {
       cancelled = true;
@@ -90,13 +106,12 @@ export default function ProductInfoEditPage() {
   }, []);
 
   useEffect(() => {
-    if (!articleId) return;
+    if (!articleId || accessLoading || !isAdmin) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
       setLoadError(null);
       try {
-        await loadMemberProfileForSession();
         const a = await getArticle(articleId);
         if (cancelled) return;
         setName(a.name ?? "");
@@ -144,7 +159,7 @@ export default function ProductInfoEditPage() {
     return () => {
       cancelled = true;
     };
-  }, [articleId]);
+  }, [accessLoading, articleId, isAdmin]);
 
   const appendLocals = useCallback((fileList: FileList | null) => {
     if (!fileList?.length) return;
@@ -281,6 +296,21 @@ export default function ProductInfoEditPage() {
       <div className="max-w-[1200px] mx-auto pb-12 text-rose-600 text-sm">
         Identifiant d’article manquant.
       </div>
+    );
+  }
+
+  if (accessLoading) {
+    return (
+      <div className="max-w-[1200px] mx-auto pb-12 flex items-center justify-center gap-2 text-gray-500 py-24">
+        <Loader2 className="w-6 h-6 animate-spin" />
+        Verification des droits...
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut modifier un article du stock." />
     );
   }
 
@@ -479,7 +509,7 @@ export default function ProductInfoEditPage() {
                     <Megaphone className="h-5 w-5" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-gray-900">Posts vitrine</h2>
+                    <h2 className="text-lg font-bold text-gray-900">{t("postsShowcase")}</h2>
                     <p className="mt-1 text-xs text-gray-600">
                       Gérez les contenus promotionnels (jusqu’à 3 par article) sur une page dédiée pour une
                       vue d’ensemble de tous les articles.

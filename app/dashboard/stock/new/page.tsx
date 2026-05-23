@@ -14,6 +14,8 @@ import {
 import { createArticle } from "@/lib/api/emall-client";
 import { getStoredOrganizationId } from "@/lib/organization-storage";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
+import { AdminRequired } from "@/components/dashboard/admin-required";
 import { uploadOrganizationArticleImage } from "@/lib/supabase/upload-organization-article-image";
 import type { ArticleCategory, WholesalePriceTier } from "@/lib/types/article-orders";
 import { ARTICLE_CATEGORY_OPTIONS } from "@/lib/dashboard/article-categories";
@@ -33,6 +35,8 @@ type LocalArticleImage = {
 export default function NewProductPage() {
   const router = useRouter();
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [name, setName] = useState("");
   const [category, setCategory] = useState<ArticleCategory>("other");
   const [description, setDescription] = useState("");
@@ -53,12 +57,21 @@ export default function NewProductPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let id = getStoredOrganizationId();
-      if (!id) {
-        await loadMemberProfileForSession();
-        id = getStoredOrganizationId();
+      try {
+        const profile = await loadMemberProfileForSession();
+        const allowed = isAdminProfile(profile);
+        const id = getStoredOrganizationId();
+        if (!cancelled) {
+          setIsAdmin(allowed);
+          setOrgId(id);
+          setAccessLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setAccessLoading(false);
+        }
       }
-      if (!cancelled) setOrgId(id);
     })();
     return () => {
       cancelled = true;
@@ -200,6 +213,21 @@ export default function NewProductPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (accessLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-24 text-gray-500">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Verification des droits...
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut ajouter un article au stock." />
+    );
   }
 
   return (

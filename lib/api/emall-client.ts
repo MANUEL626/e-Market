@@ -4,6 +4,8 @@ import {
   setStoredOrganizationId,
 } from "@/lib/organization-storage";
 import { extractApiErrorMessage } from "@/lib/api/parse-api-error";
+import { fetchMemberMeWithSession, getPrimaryMembership } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
 import type {
   ArticleOrder,
   CreateArticlePayload,
@@ -23,7 +25,9 @@ import type {
 } from "@/lib/types/article-posts";
 import type {
   AssignDeliveryPayload,
+  CreateDeliveryTrackPointPayload,
   CreateWalkInSalePayload,
+  CustomerSaleDeliveryTrackPoint,
   CustomerSaleHistoryEvent,
   CustomerSaleOrderDetail,
   CustomerSaleReceiptTokenResponse,
@@ -56,6 +60,25 @@ async function authHeaders(): Promise<Record<string, string>> {
     Authorization: `Bearer ${session.access_token}`,
     "Content-Type": "application/json",
   };
+}
+
+async function assertAdminClient(): Promise<void> {
+  const profile = await fetchMemberMeWithSession();
+  if (!isAdminProfile(profile)) {
+    throw new Error("Acces reserve aux administrateurs.");
+  }
+}
+
+async function assertAssignedDeliveryMemberClient(orderId: string): Promise<void> {
+  const profile = await fetchMemberMeWithSession();
+  const membership = profile ? getPrimaryMembership(profile) : undefined;
+  if (membership?.member_role !== "delivery_management") {
+    throw new Error("Acces reserve au livreur assigne.");
+  }
+  const assignedOrders = await listDeliveryAssignments();
+  if (!assignedOrders.some((detail) => detail.order.id === orderId)) {
+    throw new Error("Acces reserve au livreur assigne.");
+  }
 }
 
 async function request<T>(
@@ -125,6 +148,7 @@ export async function listArticles(activeOnly = true): Promise<OrganizationArtic
 export async function createArticle(
   body: CreateArticlePayload
 ): Promise<OrganizationArticle> {
+  await assertAdminClient();
   return request<OrganizationArticle>(`/articles`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -139,6 +163,7 @@ export async function updateArticle(
   articleId: string,
   body: UpdateArticlePayload
 ): Promise<OrganizationArticle> {
+  await assertAdminClient();
   return request<OrganizationArticle>(`/articles/${articleId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
@@ -182,6 +207,7 @@ export async function upsertArticlePost(
   slot: number,
   body: UpsertArticlePostPayload
 ): Promise<OrganizationArticlePost> {
+  await assertAdminClient();
   assertArticlePostSlot(slot);
   const orgId = getStoredOrganizationId();
   if (!orgId) {
@@ -204,6 +230,7 @@ export async function upsertArticlePost(
  * **404** traité comme succès (suppression idempotente).
  */
 export async function deleteArticlePost(articleId: string, slot: number): Promise<void> {
+  await assertAdminClient();
   assertArticlePostSlot(slot);
   const orgId = getStoredOrganizationId();
   if (!orgId) {
@@ -247,6 +274,7 @@ export async function createArticleOrder(body: {
   note?: string | null;
   lines: { article_id: string; quantity_ordered: number }[];
 }): Promise<ArticleOrder> {
+  await assertAdminClient();
   return request<ArticleOrder>(`/article-orders`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -261,6 +289,7 @@ export async function receiveArticleOrder(
     shortage_reason?: string | null;
   }[]
 ): Promise<unknown> {
+  await assertAdminClient();
   return request(`/article-orders/${orderId}/receive`, {
     method: "POST",
     body: JSON.stringify({ lines }),
@@ -268,6 +297,7 @@ export async function receiveArticleOrder(
 }
 
 export async function cancelArticleOrder(orderId: string): Promise<unknown> {
+  await assertAdminClient();
   return request(`/article-orders/${orderId}/cancel`, {
     method: "POST",
     body: JSON.stringify({}),
@@ -283,6 +313,7 @@ export async function listOrganizationMembers(): Promise<OrganizationMember[]> {
 export async function inviteOrganizationMember(
   body: InviteMemberPayload
 ): Promise<unknown> {
+  await assertAdminClient();
   return request(`/members/invite`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -293,6 +324,7 @@ export async function updateOrganizationMember(
   memberId: string,
   body: UpdateMemberPayload
 ): Promise<OrganizationMember> {
+  await assertAdminClient();
   return request<OrganizationMember>(`/members/${memberId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
@@ -404,6 +436,11 @@ export async function assignCustomerSaleDelivery(
   orderId: string,
   body: AssignDeliveryPayload
 ): Promise<CustomerSaleOrderDetail> {
+  await assertAdminClient();
+  const current = await getCustomerSale(orderId);
+  if (current.order.assigned_delivery_member_id) {
+    throw new Error("Cette livraison est deja attribuee a un livreur.");
+  }
   return requestCustomerSales<CustomerSaleOrderDetail>(`/${orderId}/assign-delivery`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -413,6 +450,7 @@ export async function assignCustomerSaleDelivery(
 export async function getCustomerSaleDeliveryQr(
   orderId: string
 ): Promise<CustomerSaleReceiptTokenResponse> {
+  await assertAssignedDeliveryMemberClient(orderId);
   return requestCustomerSales<CustomerSaleReceiptTokenResponse>(`/${orderId}/delivery-qr`);
 }
 
@@ -436,4 +474,42 @@ export async function listDeliveryAssignments(status?: CustomerSaleStatus): Prom
     throw new Error(extractApiErrorMessage(data));
   }
   return Array.isArray(data) ? (data as CustomerSaleOrderDetail[]) : [];
+}
+
+export async function getCustomerSaleDeliveryTrack(
+  orderId: string,
+  options?: { since?: string | null; limit?: number | null }
+): Promise<CustomerSaleDeliveryTrackPoint[]> {
+  const q = queryFromObject({
+    since: options?.since ?? null,
+    limit: options?.limit == null ? null : String(options.limit),
+  });
+  const data = await requestCustomerSales<unknown>(`/${orderId}/delivery-track${q}`);
+  return Array.isArray(data) ? (data as CustomerSaleDeliveryTrackPoint[]) : [];
+}
+
+export async function createDeliveryAssignmentTrackPoint(
+  orderId: string,
+  body: CreateDeliveryTrackPointPayload
+): Promise<CustomerSaleDeliveryTrackPoint> {
+  await assertAssignedDeliveryMemberClient(orderId);
+  const headers = await authHeaders();
+  const res = await fetch(`/api/customer-sales/delivery-assignments/${orderId}/track-points`, {
+    method: "POST",
+    headers: { ...headers },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data: unknown = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text };
+    }
+  }
+  if (!res.ok) {
+    throw new Error(extractApiErrorMessage(data));
+  }
+  return data as CustomerSaleDeliveryTrackPoint;
 }

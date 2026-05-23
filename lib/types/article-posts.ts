@@ -1,6 +1,7 @@
 /** Aligné sur l’API e-Mall — posts promotionnels par article (slots 1–3). */
 
 export type ArticlePostMediaKind = "image" | "video";
+export type ArticlePostProcessingStatus = "pending" | "processing" | "ready" | "failed";
 
 export interface OrganizationArticlePost {
   id: string;
@@ -8,8 +9,16 @@ export interface OrganizationArticlePost {
   slot: number;
   media_kind: ArticlePostMediaKind;
   media_storage_path: string;
+  original_media_storage_path?: string | null;
+  thumbnail_storage_path?: string | null;
   caption: string | null;
   active: boolean;
+  processing_status?: ArticlePostProcessingStatus | null;
+  processing_error?: string | null;
+  media_width?: number | null;
+  media_height?: number | null;
+  media_duration_seconds?: number | null;
+  media_size_bytes?: number | null;
   created_at?: string;
   updated_at?: string;
 }

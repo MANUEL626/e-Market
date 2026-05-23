@@ -53,9 +53,16 @@ export async function fetchMemberMeWithSession(): Promise<MemberMeResponse | nul
 
 /** Met à jour l’organisation courante (première adhésion avec org résolue) et le cache profil. */
 export function applyMemberMeToClientState(data: MemberMeResponse) {
-  const first = data.memberships.find((m) => m.organization);
-  if (first?.organization_id) {
-    setStoredOrganizationId(first.organization_id);
+  const currentOrganizationId = getStoredOrganizationId();
+  const current = currentOrganizationId
+    ? data.memberships.find(
+        (m) => m.organization_id === currentOrganizationId && m.organization
+      )
+    : undefined;
+  const fallback = data.memberships.find((m) => m.organization);
+  const organizationId = current?.organization_id ?? fallback?.organization_id;
+  if (organizationId) {
+    setStoredOrganizationId(organizationId);
   }
   setStoredMemberProfile(data);
 }

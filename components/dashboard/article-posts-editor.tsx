@@ -11,7 +11,6 @@ import type { OrganizationArticlePost } from "@/lib/types/article-posts";
 import { ARTICLE_POST_CAPTION_MAX, assertCaptionWithinLimit } from "@/lib/article-posts/utils";
 import {
   getAllPostSlots,
-  getVisiblePostSlots,
   inferArticlePostMediaKind,
 } from "@/lib/types/article-posts";
 import { uploadOrganizationArticlePostMedia } from "@/lib/supabase/upload-organization-article-post";
@@ -19,6 +18,12 @@ import {
   getOrganizationArticlePostSignedUrl,
   removeOrganizationArticlePostFromStorage,
 } from "@/lib/supabase/organization-article-post-url";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { translate } from "@/lib/i18n";
+import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
+import { subscribeToArticlePosts } from "@/lib/realtime/business-realtime";
+
+const postsCacheKey = (articleId: string) => `article-posts:${articleId}`;
 
 type ArticlePostsEditorProps = {
   articleId: string;
@@ -26,25 +31,34 @@ type ArticlePostsEditorProps = {
   articleActive: boolean;
 };
 
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const VIDEO_TYPES = new Set(["video/mp4", "video/quicktime", "video/x-m4v"]);
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const VIDEO_MAX_BYTES = 100 * 1024 * 1024;
+
+function isVideoProcessing(post: OrganizationArticlePost): boolean {
+  return (
+    post.media_kind === "video" &&
+    (post.processing_status === "pending" || post.processing_status === "processing")
+  );
+}
+
 export function ArticlePostsEditor({
   articleId,
   orgId,
   articleActive,
 }: ArticlePostsEditorProps) {
+  const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const [posts, setPosts] = useState<OrganizationArticlePost[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  /**
-   * false = pas à pas (un emplacement vide à la fois après le dernier rempli).
-   * true = afficher toujours les 3 blocs pour remplir dans l’ordre qu’on veut.
-   */
-  const [showAllSlots, setShowAllSlots] = useState(false);
-
   const refresh = useCallback(async () => {
     setLoadError(null);
     try {
       const list = await listArticlePosts(articleId);
       setPosts(list);
+      setBusinessCache(postsCacheKey(articleId), list);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Impossible de charger les posts.");
       setPosts([]);
@@ -54,12 +68,19 @@ export function ArticlePostsEditor({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true);
+      const cached = getBusinessCache<OrganizationArticlePost[]>(postsCacheKey(articleId));
+      if (cached) {
+        setPosts(cached);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
       setLoadError(null);
       try {
         const list = await listArticlePosts(articleId);
         if (cancelled) return;
         setPosts(list);
+        setBusinessCache(postsCacheKey(articleId), list);
       } catch (e) {
         if (!cancelled) {
           setLoadError(e instanceof Error ? e.message : "Impossible de charger les posts.");
@@ -74,24 +95,54 @@ export function ArticlePostsEditor({
     };
   }, [articleId]);
 
+  useEffect(() => {
+    return subscribeToArticlePosts<OrganizationArticlePost>(articleId, (payload) => {
+      setPosts((current) => {
+        let next = current;
+        if (payload.eventType === "DELETE") {
+          const oldId = String(payload.old.id ?? "");
+          const oldSlot = Number(payload.old.slot ?? 0);
+          next = current.filter((post) =>
+            oldId ? post.id !== oldId : post.slot !== oldSlot
+          );
+        } else {
+          const incoming = payload.new as OrganizationArticlePost;
+          const exists = current.some((post) => post.id === incoming.id || post.slot === incoming.slot);
+          next = exists
+            ? current.map((post) =>
+                post.id === incoming.id || post.slot === incoming.slot ? incoming : post
+              )
+            : [...current, incoming];
+          next = next.sort((a, b) => a.slot - b.slot);
+        }
+        setBusinessCache(postsCacheKey(articleId), next);
+        return next;
+      });
+    });
+  }, [articleId]);
+
   const postBySlot = useMemo(() => {
     const m = new Map<number, OrganizationArticlePost>();
     posts.forEach((p) => m.set(p.slot, p));
     return m;
   }, [posts]);
 
-  const incrementalSlots = useMemo(() => getVisiblePostSlots(posts), [posts]);
-  const visibleSlots = useMemo(() => {
-    if (showAllSlots) return getAllPostSlots();
-    return incrementalSlots;
-  }, [showAllSlots, incrementalSlots]);
+  const visibleSlots = useMemo(() => getAllPostSlots(), []);
+
+  useEffect(() => {
+    if (!posts.some(isVideoProcessing)) return;
+    const interval = window.setInterval(() => {
+      void refresh();
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [posts, refresh]);
 
   if (loading) {
     return (
       <div className="rounded-[24px] border border-gray-100 bg-white p-6 shadow-sm sm:p-8">
         <div className="flex items-center gap-2 text-sm text-gray-500">
           <Loader2 className="h-5 w-5 shrink-0 animate-spin" aria-hidden />
-          Chargement des posts…
+          {t("loadingPosts")}
         </div>
       </div>
     );
@@ -106,7 +157,7 @@ export function ArticlePostsEditor({
           onClick={() => void refresh()}
           className="mt-2 text-xs font-semibold text-indigo-700 hover:text-indigo-900 underline"
         >
-          Réessayer
+          {t("refresh")}
         </button>
       </div>
     );
@@ -120,7 +171,7 @@ export function ArticlePostsEditor({
             <Megaphone className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-gray-900">Posts vitrine</h2>
+            <h2 className="text-lg font-bold text-gray-900">{t("postsShowcase")}</h2>
             <p className="mt-1 text-xs leading-relaxed text-gray-500">
               Optionnel — jusqu’à trois médias pour mettre en avant ce produit. Un article{" "}
               <span className="font-semibold text-gray-700">actif</span> est requis pour la vitrine
@@ -134,37 +185,12 @@ export function ArticlePostsEditor({
             </p>
             <div className="mt-3 flex flex-col gap-2 border-t border-gray-100 pt-3 text-xs text-gray-600 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
               <span className="font-medium text-gray-700">
-                {posts.length} sur 3 post{posts.length !== 1 ? "s" : ""} en ligne
+                {posts.length} / 3 {t("postsShowcase")}
               </span>
               <span className="hidden text-gray-300 sm:inline">·</span>
-              {!showAllSlots ? (
-                <>
-                  <span className="text-gray-500 max-w-[520px]">
-                    Mode progressif : seul l’emplacement 1 est proposé au départ ; le suivant s’affiche après
-                    publication (vous pouvez aussi tout afficher).
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setShowAllSlots(true)}
-                    className="shrink-0 font-semibold text-indigo-600 hover:text-indigo-800 hover:underline"
-                  >
-                    Afficher les 3 emplacements
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="text-gray-500">
-                    Les trois emplacements sont visibles — vous pouvez remplir n’importe quel slot (1 à 3).
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setShowAllSlots(false)}
-                    className="shrink-0 font-semibold text-gray-600 hover:text-gray-900 hover:underline"
-                  >
-                    Mode progressif
-                  </button>
-                </>
-              )}
+              <span className="text-gray-500">
+                Les trois emplacements sont visibles pour remplir les slots 1 à 3.
+              </span>
             </div>
           </div>
         </div>
@@ -181,11 +207,17 @@ export function ArticlePostsEditor({
             onSaved={(updated) => {
               setPosts((prev) => {
                 const rest = prev.filter((p) => p.slot !== slot);
-                return [...rest, updated].sort((a, b) => a.slot - b.slot);
+                const next = [...rest, updated].sort((a, b) => a.slot - b.slot);
+                setBusinessCache(postsCacheKey(articleId), next);
+                return next;
               });
             }}
             onDeleted={() => {
-              setPosts((prev) => prev.filter((p) => p.slot !== slot));
+              setPosts((prev) => {
+                const next = prev.filter((p) => p.slot !== slot);
+                setBusinessCache(postsCacheKey(articleId), next);
+                return next;
+              });
             }}
             onRefreshList={refresh}
           />
@@ -219,6 +251,7 @@ function PostSlotCard({
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [blobPreview, setBlobPreview] = useState<string | null>(null);
   const [remoteSignedUrl, setRemoteSignedUrl] = useState<string | null>(null);
+  const [thumbnailSignedUrl, setThumbnailSignedUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -252,20 +285,66 @@ function PostSlotCard({
     };
   }, [initialPost?.media_storage_path]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const path = initialPost?.thumbnail_storage_path;
+    if (!path) {
+      setThumbnailSignedUrl(null);
+      return;
+    }
+    getOrganizationArticlePostSignedUrl(path).then((url) => {
+      if (!cancelled) setThumbnailSignedUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialPost?.thumbnail_storage_path]);
+
   const showVideo =
     pendingFile != null
       ? pendingFile.type.startsWith("video/")
       : initialPost?.media_kind === "video";
 
-  const displayUrl = pendingFile ? blobPreview : remoteSignedUrl;
+  const processingStatus =
+    initialPost?.processing_status ?? (initialPost?.media_kind === "video" ? "ready" : "ready");
+  const videoIsProcessing =
+    initialPost?.media_kind === "video" &&
+    (processingStatus === "pending" || processingStatus === "processing");
+  const videoHasFailed = initialPost?.media_kind === "video" && processingStatus === "failed";
+  const videoFailureMessage =
+    initialPost?.processing_error?.trim() ||
+    "La vidéo n'a pas pu être préparée. Remplacez-la par un autre fichier.";
+  const displayUrl = pendingFile
+    ? blobPreview
+    : videoIsProcessing
+      ? thumbnailSignedUrl
+      : videoHasFailed
+        ? thumbnailSignedUrl
+        : remoteSignedUrl;
 
   const pickFile = (list: FileList | null) => {
     const f = list?.[0];
     if (!f) return;
     const isImage = f.type.startsWith("image/");
     const isVideo = f.type.startsWith("video/");
+    if (isImage && !IMAGE_TYPES.has(f.type)) {
+      setError("Format image non accepté. Utilisez JPG, PNG ou WebP.");
+      return;
+    }
+    if (isVideo && !VIDEO_TYPES.has(f.type)) {
+      setError("Format vidéo non accepté. Utilisez MP4, MOV ou M4V.");
+      return;
+    }
     if (!isImage && !isVideo) {
       setError("Choisissez une image ou une vidéo.");
+      return;
+    }
+    if (isImage && f.size > IMAGE_MAX_BYTES) {
+      setError("Image trop lourde : maximum 10 MB.");
+      return;
+    }
+    if (isVideo && f.size > VIDEO_MAX_BYTES) {
+      setError("Vidéo trop lourde : maximum 100 MB.");
       return;
     }
     setError(null);
@@ -294,7 +373,6 @@ function PostSlotCard({
     try {
       if (pendingFile) {
         const media_kind = inferArticlePostMediaKind(pendingFile);
-        const oldPath = initialPost?.media_storage_path;
         const media_storage_path = await uploadOrganizationArticlePostMedia(
           orgId,
           articleId,
@@ -307,13 +385,6 @@ function PostSlotCard({
           caption: trimmed || null,
           active,
         });
-        if (oldPath && oldPath !== media_storage_path) {
-          try {
-            await removeOrganizationArticlePostFromStorage(oldPath);
-          } catch {
-            /* fichier précédent peut déjà être absent */
-          }
-        }
         if (blobPreview) URL.revokeObjectURL(blobPreview);
         setPendingFile(null);
         setBlobPreview(null);
@@ -348,13 +419,19 @@ function PostSlotCard({
     }
     setError(null);
     setBusy(true);
-    const pathToRemove = initialPost.media_storage_path;
+    const pathsToRemove = [
+      initialPost.media_storage_path,
+      initialPost.original_media_storage_path,
+      initialPost.thumbnail_storage_path,
+    ].filter((path): path is string => Boolean(path));
     try {
       await deleteArticlePost(articleId, slot);
-      try {
-        await removeOrganizationArticlePostFromStorage(pathToRemove);
-      } catch {
-        /* optionnel côté Storage */
+      for (const pathToRemove of Array.from(new Set(pathsToRemove))) {
+        try {
+          await removeOrganizationArticlePostFromStorage(pathToRemove);
+        } catch {
+          /* optionnel côté Storage */
+        }
       }
       if (blobPreview) URL.revokeObjectURL(blobPreview);
       setPendingFile(null);
@@ -388,7 +465,7 @@ function PostSlotCard({
       <div className="flex flex-col gap-4 sm:flex-row">
         <div className="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl border border-gray-200 bg-gray-200 sm:aspect-[4/3] sm:w-[200px]">
           {displayUrl ? (
-            showVideo ? (
+            showVideo && !videoIsProcessing && !videoHasFailed ? (
               <video
                 src={displayUrl}
                 className="h-full w-full object-cover"
@@ -396,14 +473,30 @@ function PostSlotCard({
                 muted
                 playsInline
               />
-            ) : (
+            ) : !videoHasFailed ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={displayUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-3 text-center text-rose-700">
+                <Film className="h-8 w-8 opacity-70" />
+                <span className="text-[11px] font-semibold">Vidéo indisponible</span>
+              </div>
             )
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-3 text-center text-gray-400">
               <ImageIcon className="h-8 w-8 opacity-60" />
               <span className="text-[11px] font-medium">Aucun média</span>
+            </div>
+          )}
+          {videoIsProcessing && (
+            <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-gray-950/75 px-3 py-2 text-[11px] font-semibold text-white">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Vidéo en préparation mobile
+            </div>
+          )}
+          {videoHasFailed && (
+            <div className="absolute inset-x-0 bottom-0 bg-rose-700/90 px-3 py-2 text-[11px] font-semibold text-white">
+              Traitement vidéo échoué
             </div>
           )}
         </div>
@@ -412,18 +505,19 @@ function PostSlotCard({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,video/*"
-            className="sr-only"
-            id={`post-slot-${slot}-file`}
+            accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/x-m4v"
+            className="hidden"
             onChange={(e) => pickFile(e.target.files)}
           />
-          <label
-            htmlFor={`post-slot-${slot}-file`}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:border-indigo-300 hover:text-indigo-700"
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            className="inline-flex w-fit items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:border-indigo-300 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Film className="h-3.5 w-3.5" />
             {hasContent ? "Remplacer le média" : "Choisir image ou vidéo"}
-          </label>
+          </button>
 
           <div>
             <label
@@ -455,6 +549,17 @@ function PostSlotCard({
             />
             <span className="text-sm text-gray-700">Visible sur la vitrine clients</span>
           </label>
+
+          {videoIsProcessing && (
+            <p className="text-xs font-medium text-amber-700">
+              Votre vidéo est en cours de préparation pour mobile.
+            </p>
+          )}
+          {videoHasFailed && (
+            <p className="text-xs font-medium text-rose-700">
+              {videoFailureMessage}
+            </p>
+          )}
 
           {error && (
             <p className="text-sm text-rose-600" role="alert">

@@ -1,3 +1,5 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
 import { 
@@ -10,10 +12,16 @@ import {
   CheckCircle, 
   Trash2,
   FileBox,
-  ArrowLeft
+  ArrowLeft,
+  Loader2
 } from "lucide-react";
+import { AdminRequired } from "@/components/dashboard/admin-required";
+import { isAdminProfile } from "@/lib/authz";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 
 export default function DraftsPage() {
+  const { profile, loading } = useMemberProfile();
+  const isAdmin = isAdminProfile(profile);
   const drafts = [
     {
       id: "DRF-001",
@@ -48,6 +56,21 @@ export default function DraftsPage() {
       integrity: 30,
     }
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-24 text-gray-500">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Verification des droits...
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut acceder aux brouillons d'articles." />
+    );
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto pb-12">

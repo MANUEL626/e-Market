@@ -29,6 +29,7 @@ import type {
   MessagingOrganizationMember,
   MessageRow,
 } from "@/lib/types/messaging";
+import { translate } from "@/lib/i18n";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -136,6 +137,7 @@ function MessagesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { profile, loading: profileLoading } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const myId = profile?.user.id;
 
   const [conversations, setConversations] = useState<ConversationListItem[]>(
@@ -436,14 +438,14 @@ function MessagesPageContent() {
       <div className="w-[380px] border-r border-gray-100 flex flex-col flex-shrink-0 bg-white">
         <div className="p-6 pb-4">
           <div className="flex items-center justify-between mb-6 gap-4">
-            <h1 className="text-2xl font-extrabold text-gray-900">Messages</h1>
+            <h1 className="text-2xl font-extrabold text-gray-900">{t("messagesTitle")}</h1>
             <button
               type="button"
               onClick={() => void openMemberPicker()}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#3730A3] hover:bg-[#2e2889] text-white text-xs font-bold transition shrink-0"
             >
               <Plus className="w-4 h-4" />
-              Nouveau
+              {t("newConversation")}
             </button>
           </div>
           <div className="relative">
@@ -452,7 +454,7 @@ function MessagesPageContent() {
               type="search"
               value={listFilter}
               onChange={(e) => setListFilter(e.target.value)}
-              placeholder="E-mail, nom, dernier message…"
+              placeholder={t("searchMessages")}
               className="w-full bg-gray-50 border border-transparent rounded-full py-3 pl-12 pr-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
             />
           </div>
@@ -467,7 +469,7 @@ function MessagesPageContent() {
         <div className="flex-1 overflow-y-auto mt-2">
           {loadingList && (
             <div className="flex items-center gap-2 text-sm text-gray-500 px-6 py-4">
-              <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
+              <Loader2 className="h-4 w-4 animate-spin" /> {t("loadingMessages")}
             </div>
           )}
           {error && (
@@ -514,7 +516,7 @@ function MessagesPageContent() {
                 onClick={() => void openMemberPicker()}
                 className="text-indigo-700 font-semibold underline"
               >
-                Nouveau
+                {t("newConversation")}
               </button>{" "}
               ou via une URL{" "}
               <span className="font-mono text-xs">
@@ -534,7 +536,7 @@ function MessagesPageContent() {
             </div>
             <div className="min-w-0">
               <h2 className="font-extrabold text-lg text-gray-900 leading-tight truncate">
-                {selectedId ? headerTitle : "Sélectionnez une conversation"}
+                {selectedId ? headerTitle : t("selectConversation")}
               </h2>
               <p className="text-[10px] font-bold text-gray-400 tracking-widest uppercase mt-0.5">
                 Messagerie E‑MALL
@@ -552,7 +554,7 @@ function MessagesPageContent() {
           )}
           {selectedId && loadingThread && (
             <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-12">
-              <Loader2 className="h-5 w-5 animate-spin" /> Chargement des messages…
+              <Loader2 className="h-5 w-5 animate-spin" /> {t("loadingMessages")}
             </div>
           )}
           {selectedId && !loadingThread && hasOlder && messages.length > 0 && (
@@ -627,7 +629,7 @@ function MessagesPageContent() {
                 }
               }}
               placeholder={
-                selectedId ? "Écrire un message…" : "Sélectionnez une conversation"
+                selectedId ? "..." : t("selectConversation")
               }
               disabled={!selectedId || sending}
               className="flex-1 bg-transparent px-4 py-2 text-sm focus:outline-none placeholder-gray-400 text-gray-700 disabled:opacity-50"
@@ -740,7 +742,7 @@ export default function MessagesPage() {
         <div className="max-w-[1400px] mx-auto h-[calc(100vh-144px)] min-h-[400px] flex items-center justify-center bg-white rounded-[24px] border border-gray-100">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Loader2 className="h-5 w-5 animate-spin" />
-            Chargement des messages…
+            {translate(undefined, "loadingMessages")}
           </div>
         </div>
       }

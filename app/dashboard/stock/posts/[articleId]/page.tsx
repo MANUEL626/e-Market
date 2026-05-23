@@ -3,30 +3,46 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
 import { getArticle } from "@/lib/api/emall-client";
 import { ArticlePostsEditor } from "@/components/dashboard/article-posts-editor";
 import { getStoredOrganizationId } from "@/lib/organization-storage";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
+import { AdminRequired } from "@/components/dashboard/admin-required";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { translate } from "@/lib/i18n";
 
 export default function StockPostEditPage() {
+  const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const params = useParams();
   const articleId = typeof params.articleId === "string" ? params.articleId : "";
   const [orgId, setOrgId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [active, setActive] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let id = getStoredOrganizationId();
-      if (!id) {
-        await loadMemberProfileForSession();
-        id = getStoredOrganizationId();
+      try {
+        const profile = await loadMemberProfileForSession();
+        const id = getStoredOrganizationId();
+        if (!cancelled) {
+          setIsAdmin(isAdminProfile(profile));
+          setOrgId(id);
+          setAccessLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+          setAccessLoading(false);
+        }
       }
-      if (!cancelled) setOrgId(id);
     })();
     return () => {
       cancelled = true;
@@ -34,13 +50,12 @@ export default function StockPostEditPage() {
   }, []);
 
   useEffect(() => {
-    if (!articleId) return;
+    if (!articleId || accessLoading || !isAdmin) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        await loadMemberProfileForSession();
         const a = await getArticle(articleId);
         if (cancelled) return;
         setName(a.name ?? "");
@@ -56,7 +71,7 @@ export default function StockPostEditPage() {
     return () => {
       cancelled = true;
     };
-  }, [articleId]);
+  }, [accessLoading, articleId, isAdmin]);
 
   if (!articleId) {
     return (
@@ -66,11 +81,26 @@ export default function StockPostEditPage() {
     );
   }
 
+  if (accessLoading) {
+    return (
+      <div className="mx-auto flex max-w-[1200px] items-center justify-center gap-2 pb-12 pt-24 text-gray-500">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        {t("verifyAccess")}
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut modifier les posts vitrine." />
+    );
+  }
+
   if (loading) {
     return (
       <div className="mx-auto flex max-w-[1200px] items-center justify-center gap-2 pb-12 pt-24 text-gray-500">
         <Loader2 className="h-6 w-6 animate-spin" />
-        Chargement…
+        {t("loadingCatalog")}
       </div>
     );
   }
@@ -83,39 +113,48 @@ export default function StockPostEditPage() {
           href="/dashboard/stock/posts"
           className="text-sm font-semibold text-indigo-600 hover:text-indigo-800"
         >
-          ← Retour aux posts vitrine
+          ← {t("postsShowcase")}
         </Link>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-[1200px] pb-12">
+    <div className="mx-auto max-w-[1200px]">
       <nav className="mb-6 flex flex-wrap items-center gap-2 text-sm text-gray-500">
         <Link href="/dashboard/stock" className="transition hover:text-gray-900">
-          Stock
+          {t("stock")}
         </Link>
         <ChevronRight className="h-4 w-4 shrink-0" />
         <Link href="/dashboard/stock/posts" className="transition hover:text-gray-900">
-          Posts vitrine
+          {t("postsShowcase")}
         </Link>
         <ChevronRight className="h-4 w-4 shrink-0" />
         <span className="font-medium text-gray-900 truncate max-w-[min(100%,280px)]">{name}</span>
       </nav>
 
-      <div className="mb-8">
-        <h1 className="text-3xl font-extrabold tracking-tight text-gray-900">Posts vitrine</h1>
-        <p className="mt-2 text-sm text-gray-500">
-          Article : <span className="font-semibold text-gray-800">{name}</span>
-          <span
-            className={`ml-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-              active ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-600"
-            }`}
-          >
-            {active ? "Actif" : "Inactif"}
-          </span>
-        </p>
-        <p className="mt-1 font-mono text-[10px] text-gray-400">{articleId}</p>
+      <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-start">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900">{t("postsShowcase")}</h1>
+          <p className="mt-2 text-sm text-gray-500">
+            Article : <span className="font-semibold text-gray-800">{name}</span>
+            <span
+              className={`ml-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                active ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-600"
+              }`}
+            >
+              {active ? "Actif" : "Inactif"}
+            </span>
+          </p>
+          <p className="mt-1 font-mono text-[10px] text-gray-400">{articleId}</p>
+        </div>
+        <Link
+          href={`/dashboard/stock/${articleId}`}
+          className="inline-flex w-fit items-center gap-2 rounded-full border border-indigo-100 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm transition hover:bg-indigo-50"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t("product")}
+        </Link>
       </div>
 
       {orgId ? (
@@ -124,14 +163,6 @@ export default function StockPostEditPage() {
         <p className="text-sm text-rose-600">Organisation introuvable.</p>
       )}
 
-      <div className="mt-10 border-t border-gray-100 pt-8">
-        <Link
-          href={`/dashboard/stock/${articleId}`}
-          className="text-sm font-semibold text-indigo-600 hover:text-indigo-800"
-        >
-          ← Fiche article (infos, médias, stock)
-        </Link>
-      </div>
     </div>
   );
 }

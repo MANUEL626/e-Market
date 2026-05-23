@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { getPrimaryMembership } from "@/lib/api/member-me";
+import { isAdminMembership } from "@/lib/authz";
 import { displayNameFromUser, initialsFromUser } from "@/lib/member-profile-storage";
 import {
   inviteOrganizationMember,
@@ -24,6 +25,9 @@ import {
 } from "@/lib/api/emall-client";
 import type { OrganizationMember } from "@/lib/types/organization-members";
 import type { OrganizationSubscriber } from "@/lib/types/organization-subscribers";
+import { translate } from "@/lib/i18n";
+import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
+import { subscribeToOrganizationMembers } from "@/lib/realtime/business-realtime";
 
 const SUBSCRIBERS_PAGE_SIZE = 20;
 
@@ -73,15 +77,16 @@ function initialsFromUsername(username: string): string {
 function canManageTeam(
   m: { member_type: string; activity_status: boolean } | undefined
 ): boolean {
-  if (!m?.activity_status) return false;
-  return m.member_type === "admin" || m.member_type === "supervisor";
+  return isAdminMembership(m);
 }
 
 export default function TeamPage() {
   const { profile, loading: profileLoading } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const primary = profile ? getPrimaryMembership(profile) : undefined;
   const manage = canManageTeam(primary);
   const activeMember = Boolean(primary?.activity_status);
+  const organizationId = primary?.organization_id ?? null;
 
   const [tab, setTab] = useState<TeamTab>("members");
   const [members, setMembers] = useState<OrganizationMember[]>([]);
@@ -107,15 +112,30 @@ export default function TeamPage() {
     setLoading(true);
     setError(null);
     try {
+      if (organizationId) {
+        const cached = getBusinessCache<OrganizationMember[]>(`members:${organizationId}`);
+        if (cached) {
+          setMembers(cached);
+          setLoading(false);
+        }
+      }
       const list = await listOrganizationMembers();
       setMembers(list);
+      if (organizationId) setBusinessCache(`members:${organizationId}`, list);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Impossible de charger l’équipe.");
       setMembers([]);
     } finally {
       setLoading(false);
     }
-  }, [profile, manage]);
+  }, [profile, manage, organizationId]);
+
+  useEffect(() => {
+    if (!organizationId || !manage) return;
+    return subscribeToOrganizationMembers<OrganizationMember>(organizationId, () => {
+      void load();
+    });
+  }, [load, manage, organizationId]);
 
   useEffect(() => {
     if (profileLoading) return;
@@ -182,17 +202,17 @@ export default function TeamPage() {
     <div className="max-w-[1200px] mx-auto pb-12">
       <div className="mb-8">
         <h1 className="text-3xl font-extrabold text-[#111827] tracking-tight">
-          Équipe
+          {t("team")}
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Membres internes, invitations, et clients qui suivent votre boutique.
+          {t("teamIntro")}
         </p>
       </div>
 
       {profileLoading && (
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Chargement du profil…
+          {t("loadingProfile")}
         </div>
       )}
 
@@ -222,7 +242,7 @@ export default function TeamPage() {
             }`}
           >
             <Users className="w-4 h-4 shrink-0" />
-            Membres
+            {t("members")}
           </button>
           <button
             type="button"
@@ -239,7 +259,7 @@ export default function TeamPage() {
             }`}
           >
             <HeartHandshake className="w-4 h-4 shrink-0" />
-            Abonnés
+            {t("subscribers")}
           </button>
         </div>
       )}
@@ -262,8 +282,7 @@ export default function TeamPage() {
           <div>
             <p className="font-semibold text-gray-900">Accès réservé aux gestionnaires</p>
             <p className="text-gray-600 mt-1">
-              Seuls les <strong>administrateurs</strong> et <strong>superviseurs</strong>{" "}
-              actifs peuvent consulter et gérer les membres internes et envoyer des invitations.
+              Seuls les <strong>administrateurs</strong> actifs peuvent consulter et gérer les membres internes et envoyer des invitations.
             </p>
             <p className="text-gray-500 mt-2 text-xs">
               Onglet <strong>Abonnés</strong> : liste des clients qui suivent la boutique (accessible à tout membre actif).
@@ -275,7 +294,7 @@ export default function TeamPage() {
       {manage && tab === "members" && (
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
           <div>
-            <h2 className="text-2xl font-extrabold text-gray-900">Membres</h2>
+            <h2 className="text-2xl font-extrabold text-gray-900">{t("members")}</h2>
             <p className="text-sm text-gray-500 mt-1">
               Inviter par e-mail, modifier le type, le rôle métier ou le statut actif.
             </p>
@@ -290,7 +309,7 @@ export default function TeamPage() {
               }}
               className="flex items-center gap-2 px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] text-white text-sm font-bold rounded-full transition shadow-sm"
             >
-              <Plus className="w-4 h-4" /> Inviter un membre
+              <Plus className="w-4 h-4" /> {t("inviteMember")}
             </button>
           </div>
         </div>
@@ -299,7 +318,7 @@ export default function TeamPage() {
       {manage && tab === "members" && loading && (
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Chargement des membres…
+          {t("loadingMembers")}
         </div>
       )}
 
@@ -394,7 +413,7 @@ export default function TeamPage() {
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
             <div>
               <h2 className="text-2xl font-extrabold text-gray-900">
-                Abonnés clients
+                {t("subscribers")}
               </h2>
               <p className="text-sm text-gray-500 mt-1 max-w-xl">
                 Comptes clients qui suivent votre organisation (abonnements actifs).
@@ -411,7 +430,7 @@ export default function TeamPage() {
           {subsLoading && (
             <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Chargement des abonnés…
+              {t("loadingSubscribers")}
             </div>
           )}
 
@@ -514,7 +533,7 @@ export default function TeamPage() {
         >
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-gray-100">
             <h2 id="invite-title" className="text-lg font-extrabold text-gray-900 mb-1">
-              Inviter un membre
+              {t("inviteMember")}
             </h2>
             <p className="text-sm text-gray-500 mb-4">
               Saisissez l’adresse e-mail. La personne recevra un message Supabase pour

@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Plus, Trash2, Loader2, Info, Package } from "lucide-react";
 import { createArticleOrder, listArticles } from "@/lib/api/emall-client";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
+import { AdminRequired } from "@/components/dashboard/admin-required";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import type { OrganizationArticle } from "@/lib/types/article-orders";
 
@@ -17,13 +19,21 @@ export default function NewOrderPage() {
   const [note, setNote] = useState("");
   const [lines, setLines] = useState<LineDraft[]>([{ article_id: "", quantity_ordered: 1 }]);
   const [loading, setLoading] = useState(true);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        await loadMemberProfileForSession();
+        const profile = await loadMemberProfileForSession();
+        const allowed = isAdminProfile(profile);
+        if (!cancelled) {
+          setIsAdmin(allowed);
+          setAccessLoading(false);
+        }
+        if (!allowed) return;
         if (!getEffectiveOrganizationId()) {
           if (!cancelled) setLoading(false);
           return;
@@ -33,6 +43,7 @@ export default function NewOrderPage() {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Impossible de charger les articles");
+          setAccessLoading(false);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -90,6 +101,21 @@ export default function NewOrderPage() {
       setSubmitting(false);
     }
   };
+
+  if (accessLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-28 text-gray-500">
+        <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
+        <span className="text-sm font-medium">Verification des droits...</span>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut creer une commande fournisseur." />
+    );
+  }
 
   if (!loading && !getEffectiveOrganizationId()) {
     return (

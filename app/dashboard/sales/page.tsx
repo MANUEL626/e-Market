@@ -16,6 +16,10 @@ import {
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
 import { createWalkInSale, listArticles, listCustomerSales } from "@/lib/api/emall-client";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { translate } from "@/lib/i18n";
+import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
+import { subscribeToCustomerSales } from "@/lib/realtime/business-realtime";
 import type { OrganizationArticle } from "@/lib/types/article-orders";
 import type {
   CustomerSaleOrderDetail,
@@ -24,7 +28,9 @@ import type {
 } from "@/lib/types/customer-sales";
 
 export default function SalesPage() {
-  const [orders, setOrders] = useState<CustomerSaleOrderDetail[]>([]);
+  const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
+  const [allOrders, setAllOrders] = useState<CustomerSaleOrderDetail[]>([]);
   const [statusGroup, setStatusGroup] = useState<"all" | CustomerSaleStatusGroup>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,20 +44,50 @@ export default function SalesPage() {
   ]);
   const [externalCustomerLabel, setExternalCustomerLabel] = useState("");
   const [walkInNotes, setWalkInNotes] = useState("");
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
 
   const loadSales = useCallback(async () => {
     await loadMemberProfileForSession();
-    if (!getEffectiveOrganizationId()) {
+    const orgId = getEffectiveOrganizationId();
+    setOrganizationId(orgId);
+    if (!orgId) {
       setOrgMissing(true);
-      setOrders([]);
+      setAllOrders([]);
       return;
     }
     setOrgMissing(false);
-    const data = await listCustomerSales(
-      statusGroup === "all" ? undefined : { status_group: statusGroup }
-    );
-    setOrders(data);
-  }, [statusGroup]);
+    const cacheKey = `customer-sales:${orgId}`;
+    const cached = getBusinessCache<CustomerSaleOrderDetail[]>(cacheKey);
+    if (cached) {
+      setAllOrders(cached);
+      setLoading(false);
+    }
+    const data = await listCustomerSales();
+    setAllOrders(data);
+    setBusinessCache(cacheKey, data);
+  }, []);
+
+  useEffect(() => {
+    if (!organizationId) return;
+    const cacheKey = `customer-sales:${organizationId}`;
+    return subscribeToCustomerSales<CustomerSaleOrderDetail["order"]>(organizationId, (payload) => {
+      setAllOrders((current) => {
+        if (payload.eventType === "DELETE") {
+          const oldId = String(payload.old.id ?? "");
+          const next = current.filter((item) => item.order.id !== oldId);
+          setBusinessCache(cacheKey, next);
+          return next;
+        }
+        const row = payload.new;
+        const exists = current.some((item) => item.order.id === row.id);
+        const next = exists
+          ? current.map((item) => (item.order.id === row.id ? { ...item, order: row } : item))
+          : [{ order: row, lines: [] }, ...current];
+        setBusinessCache(cacheKey, next);
+        return next;
+      });
+    });
+  }, [organizationId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,16 +108,21 @@ export default function SalesPage() {
     };
   }, [loadSales]);
 
+  const orders = useMemo(() => {
+    if (statusGroup === "all") return allOrders;
+    return allOrders.filter((o) => o.order.status === statusGroup);
+  }, [allOrders, statusGroup]);
+
   const kpis = useMemo(() => {
     const countByStatus = (status: CustomerSaleStatus) =>
-      orders.filter((o) => o.order.status === status).length;
+      allOrders.filter((o) => o.order.status === status).length;
     return {
-      total: orders.length,
+      total: allOrders.length,
       inProgress: countByStatus("in_progress"),
       inDelivery: countByStatus("in_delivery"),
       completed: countByStatus("completed"),
     };
-  }, [orders]);
+  }, [allOrders]);
 
   const groupFilters: Array<{ value: "all" | CustomerSaleStatusGroup; label: string }> = [
     { value: "all", label: "Toutes" },
@@ -186,7 +227,7 @@ export default function SalesPage() {
   return (
     <div className="max-w-[1200px] mx-auto pb-12">
       <div className="mb-8 flex items-center justify-between gap-3">
-        <h1 className="text-3xl font-extrabold text-[#111827] tracking-tight">Sales Overview</h1>
+        <h1 className="text-3xl font-extrabold text-[#111827] tracking-tight">{t("salesOverview")}</h1>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -194,14 +235,14 @@ export default function SalesPage() {
             className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-4 py-2 text-sm font-bold text-indigo-700 hover:bg-indigo-50"
           >
             <Plus className="h-4 w-4" />
-            Vente comptoir
+            {t("walkInSale")}
           </button>
           <Link
             href="/dashboard/delivery"
             className="inline-flex items-center gap-2 rounded-full bg-[#3730A3] px-4 py-2 text-sm font-bold text-white hover:bg-[#2f2788]"
           >
             <Truck className="h-4 w-4" />
-            Delivery
+            {t("delivery")}
           </Link>
         </div>
       </div>
@@ -209,28 +250,28 @@ export default function SalesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-8">
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-500">Commandes</span>
+            <span className="text-xs font-semibold text-gray-500">{t("orders")}</span>
             <ShoppingCart className="h-4 w-4 text-indigo-400" />
           </div>
           <p className="text-3xl font-extrabold text-gray-900">{kpis.total}</p>
         </div>
         <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-indigo-800/80">Préparation</span>
+            <span className="text-xs font-semibold text-indigo-800/80">{t("inProgress")}</span>
             <Clock3 className="h-4 w-4 text-indigo-600" />
           </div>
           <p className="text-3xl font-extrabold text-indigo-900">{kpis.inProgress}</p>
         </div>
         <div className="rounded-2xl border border-sky-100 bg-sky-50/50 p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-sky-800/80">En livraison</span>
+            <span className="text-xs font-semibold text-sky-800/80">{t("inDelivery")}</span>
             <Truck className="h-4 w-4 text-sky-600" />
           </div>
           <p className="text-3xl font-extrabold text-sky-900">{kpis.inDelivery}</p>
         </div>
         <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-emerald-800/80">Terminées</span>
+            <span className="text-xs font-semibold text-emerald-800/80">{t("completed")}</span>
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
           </div>
           <p className="text-3xl font-extrabold text-emerald-900">{kpis.completed}</p>
@@ -249,7 +290,7 @@ export default function SalesPage() {
                 : "border border-gray-200 bg-white text-gray-600 hover:border-indigo-200 hover:bg-indigo-50/50"
             }`}
           >
-            {f.label}
+            {f.value === "all" ? t("all") : f.value === "in_progress" ? t("inProgress") : f.value === "in_delivery" ? t("inDelivery") : f.value === "cancelled" ? t("cancelled") : t("completed")}
           </button>
         ))}
       </div>
@@ -271,11 +312,11 @@ export default function SalesPage() {
         {loading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-gray-500">
             <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
-            <span className="text-sm font-medium">Chargement des ventes…</span>
+            <span className="text-sm font-medium">{t("loadingSales")}</span>
           </div>
         ) : orders.length === 0 ? (
           <div className="px-6 py-20 text-center">
-            <p className="text-lg font-semibold text-gray-900">Aucune vente</p>
+            <p className="text-lg font-semibold text-gray-900">{t("noSales")}</p>
             <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
               Aucun résultat pour ce filtre. Les commandes customer apparaîtront ici.
             </p>
@@ -285,12 +326,12 @@ export default function SalesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/80 text-left text-gray-500">
-                  <th className="px-6 py-4 font-semibold">Statut</th>
-                  <th className="px-6 py-4 font-semibold">Commande</th>
-                  <th className="px-6 py-4 font-semibold">Mode</th>
-                  <th className="px-6 py-4 font-semibold">Montant</th>
-                  <th className="px-6 py-4 font-semibold">Créée</th>
-                  <th className="px-6 py-4 text-right font-semibold">Action</th>
+                  <th className="px-6 py-4 font-semibold">{t("status")}</th>
+                  <th className="px-6 py-4 font-semibold">{t("orders")}</th>
+                  <th className="px-6 py-4 font-semibold">{t("mode")}</th>
+                  <th className="px-6 py-4 font-semibold">{t("amount")}</th>
+                  <th className="px-6 py-4 font-semibold">{t("createdAt")}</th>
+                  <th className="px-6 py-4 text-right font-semibold">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -336,7 +377,7 @@ export default function SalesPage() {
                         href={`/dashboard/sales/${order.id}`}
                         className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:text-indigo-800 group-hover:underline"
                       >
-                        Gérer
+                        {t("manageSale")}
                         <ArrowUpRight className="h-3.5 w-3.5 opacity-70" />
                       </Link>
                     </td>

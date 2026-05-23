@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import { listArticles } from "@/lib/api/emall-client";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { isAdminProfile } from "@/lib/authz";
+import { translate } from "@/lib/l10n";
 import {
   articleCategoryLabel,
   formatUnitPrice,
@@ -24,22 +27,44 @@ import {
 } from "@/lib/dashboard/article-categories";
 import { getOrganizationArticleSignedUrl } from "@/lib/supabase/organization-article-image-url";
 import type { OrganizationArticle } from "@/lib/types/article-orders";
+import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
+import { subscribeToOrganizationArticles } from "@/lib/realtime/business-realtime";
+import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
+
+const stockCacheKey = (organizationId: string, activeOnly: boolean) =>
+  `stock:articles:${organizationId}:${activeOnly ? "active" : "all"}`;
 
 export default function StockManagementPage() {
+  const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const [articles, setArticles] = useState<OrganizationArticle[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
-    setLoading(true);
+    const organizationId = getEffectiveOrganizationId();
+    const cacheKey = organizationId ? stockCacheKey(organizationId, activeOnly) : null;
+    const cached = cacheKey ? getBusinessCache<OrganizationArticle[]>(cacheKey) : null;
+    if (cached) {
+      setArticles(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
-      await loadMemberProfileForSession();
+      const profile = await loadMemberProfileForSession();
+      setIsAdmin(isAdminProfile(profile));
       const list = await listArticles(activeOnly);
       setArticles(list);
+      const refreshedOrganizationId = getEffectiveOrganizationId();
+      if (refreshedOrganizationId) {
+        setBusinessCache(stockCacheKey(refreshedOrganizationId, activeOnly), list);
+      }
       const map: Record<string, string | null> = {};
       await Promise.all(
         list.map(async (a) => {
@@ -60,6 +85,40 @@ export default function StockManagementPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const organizationId = getEffectiveOrganizationId();
+    if (!organizationId) return;
+    const cacheKey = stockCacheKey(organizationId, activeOnly);
+
+    return subscribeToOrganizationArticles<OrganizationArticle>(organizationId, (payload) => {
+      setArticles((current) => {
+        let next = current;
+        if (payload.eventType === "DELETE") {
+          const oldId = String(payload.old.id ?? "");
+          next = current.filter((article) => article.id !== oldId);
+        } else {
+          const incoming = payload.new as OrganizationArticle;
+          if (activeOnly && incoming.active === false) {
+            next = current.filter((article) => article.id !== incoming.id);
+          } else {
+            const exists = current.some((article) => article.id === incoming.id);
+            next = exists
+              ? current.map((article) => (article.id === incoming.id ? incoming : article))
+              : [incoming, ...current];
+          }
+
+          if (incoming.primary_image_storage_path) {
+            void getOrganizationArticleSignedUrl(incoming.primary_image_storage_path).then((url) => {
+              setThumbs((prev) => ({ ...prev, [incoming.id]: url }));
+            });
+          }
+        }
+        setBusinessCache(cacheKey, next);
+        return next;
+      });
+    });
+  }, [activeOnly]);
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     if (!q) return articles;
@@ -69,6 +128,23 @@ export default function StockManagementPage() {
       return name.includes(q) || cat.includes(q) || (a.stock_status ?? "").includes(q);
     });
   }, [articles, filter]);
+
+  const localizedCategoryLabel = useCallback(
+    (category: string | undefined) => {
+      if (!category) return "-";
+      return t(category);
+    },
+    [t]
+  );
+
+  const localizedStockStatus = useCallback(
+    (status: string | undefined) => {
+      if (status === "out_of_stock") return t("outOfStock");
+      if (status === "low_stock") return t("lowStock");
+      return t("inStock");
+    },
+    [t]
+  );
 
   const kpis = useMemo(() => {
     const total = articles.length;
@@ -87,13 +163,13 @@ export default function StockManagementPage() {
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
         <div>
           <div className="text-[10px] font-bold text-indigo-700 tracking-widest uppercase mb-1">
-            Inventaire
+            {t("stock")}
           </div>
           <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight mb-3">
-            Stock &amp; articles
+            {t("stockArticles")}
           </h1>
           <p className="text-gray-500 max-w-xl text-base">
-            Liste synchronisée avec l’API e-Mall (catalogue, prix, statut de stock).
+            {t("stockIntro")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -108,26 +184,30 @@ export default function StockManagementPage() {
             ) : (
               <RefreshCw className="w-4 h-4" />
             )}
-            Actualiser
+            {t("refresh")}
           </button>
-          <Link
-            href="/dashboard/stock/drafts"
-            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
-          >
-            <FileEdit className="w-4 h-4" /> Brouillons
-          </Link>
-          <Link
-            href="/dashboard/stock/posts"
-            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
-          >
-            <Megaphone className="w-4 h-4" /> Posts vitrine
-          </Link>
-          <Link
-            href="/dashboard/stock/new"
-            className="flex items-center gap-2 px-5 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] text-white text-sm font-semibold rounded-full transition shadow-sm"
-          >
-            <Plus className="w-4 h-4" /> Ajouter un article
-          </Link>
+          {isAdmin && (
+            <>
+              <Link
+                href="/dashboard/stock/drafts"
+                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
+              >
+                <FileEdit className="w-4 h-4" /> {t("drafts")}
+              </Link>
+              <Link
+                href="/dashboard/stock/posts"
+                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
+              >
+                <Megaphone className="w-4 h-4" /> {t("postsShowcase")}
+              </Link>
+              <Link
+                href="/dashboard/stock/new"
+                className="flex items-center gap-2 px-5 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] text-white text-sm font-semibold rounded-full transition shadow-sm"
+              >
+                <Plus className="w-4 h-4" /> {t("addArticle")}
+              </Link>
+            </>
+          )}
         </div>
       </div>
 
@@ -139,7 +219,7 @@ export default function StockManagementPage() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-500 mb-1">Articles</div>
+            <div className="text-xs font-semibold text-gray-500 mb-1">{t("articles")}</div>
             <div className="text-3xl font-extrabold text-gray-900">{kpis.total}</div>
           </div>
         </div>
@@ -150,7 +230,7 @@ export default function StockManagementPage() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-500 mb-1">Rupture</div>
+            <div className="text-xs font-semibold text-gray-500 mb-1">{t("outOfStock")}</div>
             <div className="text-3xl font-extrabold text-gray-900">{kpis.out}</div>
           </div>
         </div>
@@ -161,12 +241,12 @@ export default function StockManagementPage() {
             </div>
           </div>
           <div>
-            <div className="text-xs font-semibold text-gray-500 mb-1">Stock bas</div>
+            <div className="text-xs font-semibold text-gray-500 mb-1">{t("lowStock")}</div>
             <div className="text-3xl font-extrabold text-gray-900">{kpis.low}</div>
           </div>
         </div>
         <div className="bg-white p-6 rounded-[24px] shadow-sm border border-gray-100 flex flex-col justify-between hover:shadow-md transition">
-          <div className="text-xs font-semibold text-gray-500 mb-1">Valeur (qty × prix)</div>
+          <div className="text-xs font-semibold text-gray-500 mb-1">{t("stockValue")}</div>
           <div className="text-2xl font-extrabold text-gray-900">
             {formatUnitPrice(kpis.value)}
           </div>
@@ -181,7 +261,7 @@ export default function StockManagementPage() {
               type="text"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filtrer par nom, catégorie…"
+              placeholder={t("searchArticle")}
               className="w-full bg-gray-50 border border-transparent rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
             />
           </div>
@@ -193,7 +273,7 @@ export default function StockManagementPage() {
                 onChange={(e) => setActiveOnly(!e.target.checked)}
                 className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
               />
-              Afficher inactifs
+              {t("showInactive")}
             </label>
             <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-xl opacity-60 pointer-events-none">
               <span className="p-2 text-gray-500 rounded-lg bg-white shadow-sm">
@@ -216,18 +296,18 @@ export default function StockManagementPage() {
           {loading && !articles.length ? (
             <div className="flex items-center justify-center py-20 text-gray-500 gap-2">
               <Loader2 className="w-5 h-5 animate-spin" />
-              Chargement…
+              {t("loadingCatalog")}
             </div>
           ) : (
             <table className="w-full text-sm text-left">
               <thead className="text-[10px] font-bold text-gray-500 tracking-wider uppercase bg-gray-50/50">
                 <tr>
-                  <th className="px-6 py-5 rounded-tl-xl">Produit</th>
-                  <th className="px-6 py-5">Catégorie</th>
-                  <th className="px-6 py-5">Prix</th>
-                  <th className="px-6 py-5">Quantité</th>
-                  <th className="px-6 py-5">Statut</th>
-                  <th className="px-6 py-5 rounded-tr-xl text-right">Actions</th>
+                  <th className="px-6 py-5 rounded-tl-xl">{t("product")}</th>
+                  <th className="px-6 py-5">{t("category")}</th>
+                  <th className="px-6 py-5">{t("price")}</th>
+                  <th className="px-6 py-5">{t("quantity")}</th>
+                  <th className="px-6 py-5">{t("status")}</th>
+                  <th className="px-6 py-5 rounded-tr-xl text-right">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -265,7 +345,7 @@ export default function StockManagementPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-gray-600">
-                        {articleCategoryLabel(product.category)}
+                        {localizedCategoryLabel(product.category)}
                       </td>
                       <td className="px-6 py-4 font-bold text-gray-900">
                         {formatUnitPrice(product.unit_sale_price)}
@@ -289,17 +369,23 @@ export default function StockManagementPage() {
                         <span
                           className={`px-2.5 py-1 text-[10px] font-bold rounded-full tracking-wider ${badge.className}`}
                         >
-                          {badge.label}
+                          {localizedStockStatus(product.stock_status)}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <Link
-                          href={`/dashboard/stock/${product.id}`}
-                          className="inline-flex items-center justify-center text-gray-400 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50 transition"
-                          title="Voir / modifier"
-                        >
-                          <Info className="w-5 h-5" />
-                        </Link>
+                        {isAdmin ? (
+                          <Link
+                            href={`/dashboard/stock/${product.id}`}
+                            className="inline-flex items-center justify-center text-gray-400 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50 transition"
+                            title={t("manage")}
+                          >
+                            <Info className="w-5 h-5" />
+                          </Link>
+                        ) : (
+                          <span className="text-xs font-semibold text-gray-400">
+                            {t("viewOnly")}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -312,12 +398,11 @@ export default function StockManagementPage() {
         <div className="p-4 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
           <div>
             {filtered.length === 0 && !loading ? (
-              <span>Aucun article à afficher.</span>
+              <span>{t("noArticles")}</span>
             ) : (
               <>
-                <span className="font-bold text-gray-900">{filtered.length}</span> article
-                {filtered.length > 1 ? "s" : ""}
-                {filter.trim() ? " (filtrés)" : ""}
+                <span className="font-bold text-gray-900">{filtered.length}</span> {t("articles")}
+                {filter.trim() ? ` (${t("resultsFiltered")})` : ""}
               </>
             )}
           </div>

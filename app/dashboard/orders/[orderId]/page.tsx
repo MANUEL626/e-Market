@@ -20,6 +20,8 @@ import {
   cancelArticleOrder,
 } from "@/lib/api/emall-client";
 import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { isAdminProfile } from "@/lib/authz";
+import { AdminRequired } from "@/components/dashboard/admin-required";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import type {
   ArticleOrder,
@@ -64,6 +66,8 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<ArticleOrder | null>(null);
   const [articles, setArticles] = useState<OrganizationArticle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [receiveQty, setReceiveQty] = useState<Record<string, number>>({});
@@ -78,8 +82,9 @@ export default function OrderDetailPage() {
   }, [articles]);
 
   useEffect(() => {
-    if (!orderId || !getEffectiveOrganizationId()) {
+    if (!orderId) {
       setLoading(false);
+      setAccessLoading(false);
       return;
     }
     let cancelled = false;
@@ -87,7 +92,13 @@ export default function OrderDetailPage() {
       try {
         setLoading(true);
         setError(null);
-        await loadMemberProfileForSession();
+        const profile = await loadMemberProfileForSession();
+        const allowed = isAdminProfile(profile);
+        if (!cancelled) {
+          setIsAdmin(allowed);
+          setAccessLoading(false);
+        }
+        if (!allowed || !getEffectiveOrganizationId()) return;
         const [o, arts] = await Promise.all([
           getArticleOrder(orderId),
           listArticles(false).catch(() => [] as OrganizationArticle[]),
@@ -109,6 +120,7 @@ export default function OrderDetailPage() {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Erreur");
+          setAccessLoading(false);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -194,6 +206,21 @@ export default function OrderDetailPage() {
       setCancelSubmitting(false);
     }
   };
+
+  if (accessLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-28 text-gray-500 gap-3">
+        <Loader2 className="w-10 h-10 animate-spin text-indigo-400" />
+        <span className="text-sm font-medium">Verification des droits...</span>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminRequired description="Seul un administrateur peut acceder aux commandes fournisseur." />
+    );
+  }
 
   if (!getEffectiveOrganizationId()) {
     return (
