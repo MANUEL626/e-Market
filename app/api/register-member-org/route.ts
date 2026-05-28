@@ -1,8 +1,85 @@
 import { NextResponse } from "next/server";
+import {
+  DEFAULT_PURCHASE_CURRENCY,
+  DEFAULT_SALE_CURRENCY,
+  normalizeApiCurrency,
+} from "@/lib/currencies";
 
 function getBackendUrl(): string | undefined {
   const raw = process.env.E_MALL_API_URL?.trim();
   return raw ? raw.replace(/\/$/, "") : undefined;
+}
+
+function optionalString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeCountries(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .filter((country): country is string => typeof country === "string")
+        .map((country) => country.trim().toUpperCase())
+        .filter((country) => /^[A-Z]{2}$/.test(country))
+    )
+  );
+}
+
+function normalizeLocale(value: unknown): "fr" | "en" | "de" | "zh" {
+  return value === "en" || value === "de" || value === "zh" ? value : "fr";
+}
+
+function normalizeDefaultCurrencies(value: unknown): { purchase: string; sale: string } {
+  if (!value || typeof value !== "object") {
+    return {
+      purchase: DEFAULT_PURCHASE_CURRENCY,
+      sale: DEFAULT_SALE_CURRENCY,
+    };
+  }
+  const input = value as Record<string, unknown>;
+  return {
+    purchase: normalizeApiCurrency(input.purchase, DEFAULT_PURCHASE_CURRENCY),
+    sale: normalizeApiCurrency(input.sale, DEFAULT_SALE_CURRENCY),
+  };
+}
+
+function buildRegisterPayload(body: unknown): Record<string, unknown> | null {
+  if (!body || typeof body !== "object") return null;
+  const input = body as Record<string, unknown>;
+  const organizationName = optionalString(input.organization_name);
+  const organizationCategory = input.organization_category;
+  const email = optionalString(input.email);
+  const password = typeof input.password === "string" ? input.password : null;
+
+  if (
+    !organizationName ||
+    (organizationCategory !== "sales" && organizationCategory !== "delivery") ||
+    !email ||
+    !password
+  ) {
+    return null;
+  }
+
+  return {
+    organization_name: organizationName,
+    organization_category: organizationCategory,
+    organization_description: optionalString(input.organization_description),
+    organization_profile_picture: optionalString(input.organization_profile_picture),
+    organization_countries: normalizeCountries(input.organization_countries),
+    organization_default_currencies: normalizeDefaultCurrencies(
+      input.organization_default_currencies
+    ),
+    member_first_name: optionalString(input.member_first_name),
+    member_last_name: optionalString(input.member_last_name),
+    member_username: optionalString(input.member_username),
+    member_profile_picture: optionalString(input.member_profile_picture),
+    member_locale: normalizeLocale(input.member_locale),
+    email,
+    password,
+  };
 }
 
 export async function POST(request: Request) {
@@ -21,10 +98,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Corps JSON invalide" }, { status: 400 });
   }
 
+  const payload = buildRegisterPayload(body);
+  if (!payload) {
+    return NextResponse.json({ error: "Corps d'inscription invalide" }, { status: 400 });
+  }
+
   const res = await fetch(`${backend}/api/v1/organizations/register-with-member`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;

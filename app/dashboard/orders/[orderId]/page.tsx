@@ -19,7 +19,10 @@ import {
   receiveArticleOrder,
   cancelArticleOrder,
 } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+} from "@/components/dashboard/dashboard-access-provider";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import type {
   ArticleOrder,
@@ -27,6 +30,7 @@ import type {
   OrderStatus,
   OrganizationArticle,
 } from "@/lib/types/article-orders";
+import { formatMoney } from "@/lib/currencies";
 
 function statusLabel(status: OrderStatus) {
   const labels: Record<OrderStatus, string> = {
@@ -58,6 +62,16 @@ function statusPill(status: OrderStatus) {
 }
 
 export default function OrderDetailPage() {
+  return (
+    <SalesOrganizationGate description="Les commandes fournisseur sont disponibles uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut acceder aux commandes fournisseur.">
+        <OrderDetailContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function OrderDetailContent() {
   const params = useParams();
   const router = useRouter();
   const orderId = params.orderId as string;
@@ -70,6 +84,7 @@ export default function OrderDetailPage() {
   const [shortage, setShortage] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   const articleNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -78,7 +93,7 @@ export default function OrderDetailPage() {
   }, [articles]);
 
   useEffect(() => {
-    if (!orderId || !getEffectiveOrganizationId()) {
+    if (!orderId) {
       setLoading(false);
       return;
     }
@@ -87,7 +102,7 @@ export default function OrderDetailPage() {
       try {
         setLoading(true);
         setError(null);
-        await loadMemberProfileForSession();
+        if (!getEffectiveOrganizationId()) return;
         const [o, arts] = await Promise.all([
           getArticleOrder(orderId),
           listArticles(false).catch(() => [] as OrganizationArticle[]),
@@ -125,6 +140,17 @@ export default function OrderDetailPage() {
   );
   const canReceive = order?.status === "open" && lines.length > 0 && noLineReceivedYet;
   const canCancel = order?.status === "open" && noLineReceivedYet;
+
+  useEffect(() => {
+    if (!cancelDialogOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !cancelSubmitting) {
+        setCancelDialogOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cancelDialogOpen, cancelSubmitting]);
 
   const handleReceive = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -178,17 +204,16 @@ export default function OrderDetailPage() {
 
   const handleCancel = async () => {
     if (!order || !canCancel) return;
-    if (!confirm("Annuler cette commande ? Aucune réception ne doit encore avoir été faite.")) {
-      return;
-    }
     setCancelSubmitting(true);
     setError(null);
     try {
       await cancelArticleOrder(order.id);
+      setCancelDialogOpen(false);
       router.refresh();
       const refreshed = await getArticleOrder(order.id);
       setOrder(refreshed);
     } catch (err) {
+      setCancelDialogOpen(false);
       setError(err instanceof Error ? err.message : "Annulation impossible");
     } finally {
       setCancelSubmitting(false);
@@ -231,6 +256,7 @@ export default function OrderDetailPage() {
   }
 
   if (!order) return null;
+  const orderCurrency = order.currency ?? undefined;
 
   return (
     <div className="max-w-3xl mx-auto pb-12">
@@ -242,6 +268,69 @@ export default function OrderDetailPage() {
         Retour à la liste
       </Link>
 
+      {cancelDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="presentation"
+        >
+          <button
+            type="button"
+            aria-label="Fermer la confirmation"
+            disabled={cancelSubmitting}
+            className="absolute inset-0 bg-slate-950/40 backdrop-blur-[2px] disabled:pointer-events-none"
+            onClick={() => setCancelDialogOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-order-title"
+            className="relative z-10 w-full max-w-md rounded-[24px] border border-rose-100 bg-white p-6 shadow-2xl"
+          >
+            <div className="mb-5 flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-rose-50 text-rose-700 ring-1 ring-rose-100">
+                <Ban className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 id="cancel-order-title" className="text-lg font-extrabold text-gray-900">
+                  Annuler cette commande ?
+                </h2>
+                <p className="mt-2 text-sm leading-relaxed text-gray-500">
+                  Aucune reception ne doit encore avoir ete faite. Cette action gardera une trace
+                  de la commande avec le statut annule.
+                </p>
+              </div>
+            </div>
+            <div className="rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-500">
+              <span className="font-bold text-gray-700">Reference</span>
+              <span className="mt-1 block break-all font-mono">{order.id}</span>
+            </div>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={cancelSubmitting}
+                onClick={() => setCancelDialogOpen(false)}
+                className="inline-flex justify-center rounded-full border border-gray-200 px-5 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
+              >
+                Garder la commande
+              </button>
+              <button
+                type="button"
+                disabled={cancelSubmitting}
+                onClick={handleCancel}
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-rose-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-60"
+              >
+                {cancelSubmitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Ban className="h-4 w-4" />
+                )}
+                Confirmer l'annulation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="rounded-[28px] border border-gray-100 bg-white p-8 shadow-[0_8px_30px_rgb(0,0,0,0.06)] mb-8">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-6">
           <div className="space-y-4">
@@ -251,6 +340,9 @@ export default function OrderDetailPage() {
             <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Détail commande</h1>
             <p className="text-gray-600">{statusLabel(order.status)}</p>
             <div className="flex flex-wrap gap-4 text-sm text-gray-500">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 font-bold text-indigo-700">
+                Total : {formatMoney(order.total_amount, orderCurrency)}
+              </span>
               <span className="inline-flex items-center gap-1.5">
                 <Hash className="w-4 h-4 text-indigo-400" />
                 <span className="font-mono text-xs text-gray-700 break-all">{order.id}</span>
@@ -269,7 +361,7 @@ export default function OrderDetailPage() {
           {canCancel && (
             <button
               type="button"
-              onClick={handleCancel}
+              onClick={() => setCancelDialogOpen(true)}
               disabled={cancelSubmitting}
               className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full border-2 border-rose-100 bg-rose-50 text-rose-800 text-sm font-bold hover:bg-rose-100 disabled:opacity-50 transition"
             >
@@ -312,6 +404,12 @@ export default function OrderDetailPage() {
                 <div className="flex flex-wrap gap-4 text-sm">
                   <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700">
                     Commandé : <strong className="tabular-nums">{line.quantity_ordered}</strong>
+                  </span>
+                  <span className="rounded-lg bg-indigo-50 px-3 py-1.5 text-indigo-800 ring-1 ring-indigo-100">
+                    Total : <strong>{formatMoney(line.total_price, orderCurrency)}</strong>
+                  </span>
+                  <span className="rounded-lg bg-gray-50 px-3 py-1.5 text-gray-700 ring-1 ring-gray-100">
+                    Unit. : <strong>{formatMoney(line.unit_price, orderCurrency)}</strong>
                   </span>
                   {typeof line.quantity_received === "number" && (
                     <span className="rounded-lg bg-emerald-50 px-3 py-1.5 text-emerald-800 ring-1 ring-emerald-100">

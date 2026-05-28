@@ -1,4 +1,5 @@
 import type { ArticleCategory } from "@/lib/types/article-orders";
+import { formatMoney } from "@/lib/currencies";
 
 export const ARTICLE_CATEGORY_OPTIONS: { value: ArticleCategory; label: string }[] = [
   { value: "electronics", label: "Électronique" },
@@ -32,10 +33,6 @@ export function stockStatusBadge(stockStatus: string | undefined): {
   }
 }
 
-export function formatUnitPrice(value: number | undefined): string {
-  if (value == null || Number.isNaN(value)) return "—";
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "EUR",
-  }).format(value);
+export function formatUnitPrice(value: number | undefined, currency = "xof"): string {
+  return formatMoney(value, currency);
 }

@@ -13,14 +13,15 @@ export async function uploadOrganizationArticlePostMedia(
 ): Promise<string> {
   assertArticlePostSlot(slot);
   const supabase = createClient();
-  const rawExt = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : "bin";
-  const ext = /^[a-z0-9]+$/i.test(rawExt) ? rawExt : "bin";
-  const objectPath = `${organizationId}/posts/${articleId}/slot-${slot}-${crypto.randomUUID()}.${ext}`;
+  const fallbackName = crypto.randomUUID();
+  const safeName = (file.name || fallbackName).replace(/[^a-zA-Z0-9._-]/g, "-");
+  const objectPath = `${organizationId}/posts/${articleId}/${slot}/${Date.now()}-${safeName}`;
   if (!isPostMediaPathForOrganization(organizationId, objectPath)) {
     throw new Error("Chemin d’upload invalide (préfixe organisation requis).");
   }
   const { error } = await supabase.storage.from(ARTICLE_POST_BUCKET).upload(objectPath, file, {
     cacheControl: "3600",
+    contentType: file.type || undefined,
     upsert: false,
   });
   if (error) throw new Error(error.message);

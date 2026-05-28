@@ -3,6 +3,12 @@ export type MemberMeOrganization = {
   name: string;
   org_type: string;
   description: string | null;
+  profile_picture: string | null;
+  countries: string[] | null;
+  default_currencies?: {
+    purchase?: string | null;
+    sale?: string | null;
+  } | null;
   created_by: string;
   created_at: string;
 };
@@ -31,8 +37,16 @@ export type MemberMeUser = {
   created_at: string;
 };
 
+export type MemberMeParams = {
+  user_id: string;
+  locale: "fr" | "en" | "de" | "zh" | string;
+  extra: Record<string, unknown>;
+  updated_at: string | null;
+};
+
 export type MemberMeResponse = {
   user: MemberMeUser;
   memberships: MemberMeMembership[];
   auth: Record<string, unknown> | null;
+  params: MemberMeParams | null;
 };

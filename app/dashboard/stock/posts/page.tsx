@@ -9,13 +9,32 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { listArticlePosts, listArticles } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { getArticlePostsCountsBatch, listArticles } from "@/lib/api/emall-client";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { translate } from "@/lib/l10n";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+  useDashboardAccess,
+} from "@/components/dashboard/dashboard-access-provider";
 import { articleCategoryLabel } from "@/lib/dashboard/article-categories";
 import { getOrganizationArticleSignedUrl } from "@/lib/supabase/organization-article-image-url";
 import type { OrganizationArticle } from "@/lib/types/article-orders";
 
 export default function StockPostsIndexPage() {
+  return (
+    <SalesOrganizationGate description="Les posts vitrine sont disponibles uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut acceder aux posts vitrine.">
+        <StockPostsIndexContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function StockPostsIndexContent() {
+  const { profile } = useMemberProfile();
+  const access = useDashboardAccess();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const [articles, setArticles] = useState<OrganizationArticle[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
   const [postCounts, setPostCounts] = useState<Record<string, number | null>>({});
@@ -24,12 +43,12 @@ export default function StockPostsIndexPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
+  const postsFeatureEnabled = access.hasFeature("article_posts");
 
   const loadArticles = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      await loadMemberProfileForSession();
       const list = await listArticles(activeOnly);
       setArticles(list);
       const map: Record<string, string | null> = {};
@@ -53,6 +72,10 @@ export default function StockPostsIndexPage() {
   }, [loadArticles]);
 
   useEffect(() => {
+    if (!postsFeatureEnabled) {
+      setPostCounts({});
+      return;
+    }
     if (articles.length === 0) {
       setPostCounts({});
       return;
@@ -66,22 +89,15 @@ export default function StockPostsIndexPage() {
       });
       setPostCounts(next);
       try {
-        const results = await Promise.all(
-          articles.map(async (a) => {
-            try {
-              const posts = await listArticlePosts(a.id);
-              return [a.id, posts.length] as const;
-            } catch {
-              return [a.id, -1] as const;
-            }
-          })
-        );
+        const ids = articles.map((a) => a.id);
+        const merged = await getArticlePostsCountsBatch(ids);
         if (cancelled) return;
-        const merged: Record<string, number> = {};
-        results.forEach(([id, n]) => {
-          merged[id] = n;
+        // si certains ids sont absents, on les met à 0 (pas d'appels individuels).
+        const out: Record<string, number> = {};
+        ids.forEach((id) => {
+          out[id] = Number.isFinite(merged[id]) ? merged[id] : 0;
         });
-        setPostCounts(merged);
+        setPostCounts(out);
       } finally {
         if (!cancelled) setCountsLoading(false);
       }
@@ -89,7 +105,7 @@ export default function StockPostsIndexPage() {
     return () => {
       cancelled = true;
     };
-  }, [articles]);
+  }, [articles, postsFeatureEnabled]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -105,23 +121,22 @@ export default function StockPostsIndexPage() {
     <div className="mx-auto max-w-[1200px] pb-12">
       <nav className="mb-6 flex items-center gap-2 text-sm text-gray-500">
         <Link href="/dashboard/stock" className="transition hover:text-gray-900">
-          Stock
+          {t("stock")}
         </Link>
         <ChevronRight className="h-4 w-4 shrink-0" />
-        <span className="font-medium text-gray-900">Posts vitrine</span>
+        <span className="font-medium text-gray-900">{t("postsShowcase")}</span>
       </nav>
 
       <div className="mb-8 flex flex-col justify-between gap-6 md:flex-row md:items-start">
         <div>
           <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-indigo-700">
-            Promotion
+            {t("promotion")}
           </div>
           <h1 className="mb-3 text-4xl font-extrabold tracking-tight text-gray-900">
-            Posts vitrine
+            {t("postsShowcase")}
           </h1>
           <p className="max-w-xl text-base text-gray-500">
-            Gérez les contenus promotionnels (image ou vidéo) par article — jusqu’à trois emplacements par
-            produit. Choisissez un article pour éditer ses posts.
+            {t("showcasePostsIntro")}
           </p>
         </div>
         <button
@@ -131,7 +146,7 @@ export default function StockPostsIndexPage() {
           className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-60"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          Actualiser le catalogue
+          {t("refresh")}
         </button>
       </div>
 
@@ -142,7 +157,7 @@ export default function StockPostsIndexPage() {
             type="search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Rechercher un article…"
+            placeholder={t("searchArticle")}
             className="w-full rounded-full border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           />
         </div>
@@ -153,7 +168,7 @@ export default function StockPostsIndexPage() {
             onChange={(e) => setActiveOnly(e.target.checked)}
             className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
           />
-          Articles actifs seulement
+          {t("activeArticlesOnly")}
         </label>
       </div>
 
@@ -166,7 +181,7 @@ export default function StockPostsIndexPage() {
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-20 text-gray-500">
           <Loader2 className="h-6 w-6 animate-spin" />
-          Chargement du catalogue…
+          {t("loadingCatalog")}
         </div>
       ) : (
         <div className="overflow-hidden rounded-[24px] border border-gray-100 bg-white shadow-sm">
@@ -174,8 +189,8 @@ export default function StockPostsIndexPage() {
             <table className="min-w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/80 text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                  <th className="px-6 py-4">Article</th>
-                  <th className="hidden px-6 py-4 sm:table-cell">Catégorie</th>
+                  <th className="px-6 py-4">{t("articles")}</th>
+                  <th className="hidden px-6 py-4 sm:table-cell">{t("category")}</th>
                   <th className="px-6 py-4">Posts</th>
                   <th className="px-6 py-4 text-right">Action</th>
                 </tr>
@@ -184,7 +199,7 @@ export default function StockPostsIndexPage() {
                 {filtered.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
-                      Aucun article ne correspond.
+                      {t("noArticleMatches")}
                     </td>
                   </tr>
                 ) : (
@@ -227,17 +242,17 @@ export default function StockPostsIndexPage() {
                             <span className="text-amber-600">Erreur</span>
                           ) : (
                             <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-bold text-indigo-800">
-                              {cnt ?? 0} / 3
+                              {cnt ?? 0} posts
                             </span>
                           )}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <Link
-                            href={`/dashboard/stock/posts/${a.id}`}
+                            href={`/dashboard/stock/posts/${a.id}?from=posts`}
                             className="inline-flex items-center gap-1.5 rounded-full bg-[#3730A3] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#2e2889]"
                           >
                             <Megaphone className="h-3.5 w-3.5" />
-                            Gérer
+                            {t("manage")}
                           </Link>
                         </td>
                       </tr>

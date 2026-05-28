@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   Loader2,
@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { getPrimaryMembership } from "@/lib/api/member-me";
+import { isAdminMembership } from "@/lib/authz";
 import { displayNameFromUser, initialsFromUser } from "@/lib/member-profile-storage";
 import {
   inviteOrganizationMember,
@@ -18,12 +19,13 @@ import {
   updateOrganizationMember,
 } from "@/lib/api/emall-client";
 import type { OrganizationMember } from "@/lib/types/organization-members";
+import { translate } from "@/lib/i18n";
+import { useDashboardAccess } from "@/components/dashboard/dashboard-access-provider";
 
 function canManageTeam(
   m: { member_type: string; activity_status: boolean } | undefined
 ): boolean {
-  if (!m?.activity_status) return false;
-  return m.member_type === "admin" || m.member_type === "supervisor";
+  return isAdminMembership(m);
 }
 
 export default function TeamMemberDetailPage() {
@@ -33,6 +35,8 @@ export default function TeamMemberDetailPage() {
   const isNew = rawId === "new";
 
   const { profile, loading: profileLoading } = useMemberProfile();
+  const access = useDashboardAccess();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const primary = profile ? getPrimaryMembership(profile) : undefined;
   const manage = canManageTeam(primary);
 
@@ -50,6 +54,23 @@ export default function TeamMemberDetailPage() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteErr, setInviteErr] = useState<string | null>(null);
   const [inviteOk, setInviteOk] = useState<string | null>(null);
+  const teamLimitExceeded = access.isLimitExceeded("team_members");
+  const hasMemberChanges = useMemo(() => {
+    if (!member) return false;
+    return (
+      memberType !== member.member_type ||
+      memberRole !== member.member_role ||
+      activityStatus !== member.activity_status
+    );
+  }, [activityStatus, member, memberRole, memberType]);
+
+  function resetMemberForm() {
+    if (!member) return;
+    setMemberType(member.member_type);
+    setMemberRole(member.member_role);
+    setActivityStatus(member.activity_status);
+    setSaveErr(null);
+  }
 
   const loadMember = useCallback(async () => {
     if (!rawId || isNew) return;
@@ -106,6 +127,12 @@ export default function TeamMemberDetailPage() {
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
+    if (teamLimitExceeded) {
+      setInviteErr(
+        "La limite de membres de votre abonnement est atteinte. Changez de plan avant d'inviter un nouveau membre."
+      );
+      return;
+    }
     setInviteBusy(true);
     setInviteErr(null);
     setInviteOk(null);
@@ -144,13 +171,13 @@ export default function TeamMemberDetailPage() {
       <div className="max-w-[640px] mx-auto pb-12">
         <nav className="flex items-center gap-2 text-[10px] font-extrabold text-gray-500 tracking-widest uppercase mb-4">
           <Link href="/dashboard/team" className="hover:text-gray-900 transition">
-            Équipe
+            {t("team")}
           </Link>
           <ChevronRight className="w-3 h-3" />
           <span className="text-gray-900">Invitation</span>
         </nav>
         <h1 className="text-2xl font-extrabold text-gray-900 mb-2">
-          Inviter un membre
+          {t("inviteMember")}
         </h1>
         <p className="text-sm text-gray-500 mb-8">
           Envoi d’un e-mail d’invitation (compte nouveau ou rattachement à l’organisation).
@@ -183,11 +210,11 @@ export default function TeamMemberDetailPage() {
               href="/dashboard/team"
               className="px-6 py-3 text-sm font-bold text-gray-600 hover:text-gray-900"
             >
-              Annuler
+              {t("cancel")}
             </Link>
             <button
               type="submit"
-              disabled={inviteBusy}
+              disabled={inviteBusy || teamLimitExceeded}
               className="px-8 py-3 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-60 text-white text-sm font-bold rounded-full transition flex items-center gap-2"
             >
               {inviteBusy && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -205,7 +232,7 @@ export default function TeamMemberDetailPage() {
     <div className="max-w-[1000px] mx-auto pb-12">
       <nav className="flex items-center gap-2 text-[10px] font-extrabold text-gray-500 tracking-widest uppercase mb-4">
         <Link href="/dashboard/team" className="hover:text-gray-900 transition">
-          Équipe
+          {t("team")}
         </Link>
         <ChevronRight className="w-3 h-3" />
         <span className="text-gray-900">Modifier le membre</span>
@@ -214,7 +241,7 @@ export default function TeamMemberDetailPage() {
       {profileLoading && (
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Chargement…
+          {t("loadingProfile")}
         </div>
       )}
 
@@ -322,9 +349,15 @@ export default function TeamMemberDetailPage() {
               <div className="flex justify-end gap-4 pt-4">
                 <Link
                   href="/dashboard/team"
+                  onClick={(event) => {
+                    if (hasMemberChanges) {
+                      event.preventDefault();
+                      resetMemberForm();
+                    }
+                  }}
                   className="px-6 py-3 text-sm font-bold text-gray-600 hover:text-gray-900"
                 >
-                  Annuler
+                  {hasMemberChanges ? t("cancel") : "Retour"}
                 </Link>
                 <button
                   type="submit"
@@ -332,7 +365,7 @@ export default function TeamMemberDetailPage() {
                   className="px-8 py-3 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-60 text-white text-sm font-bold rounded-full transition flex items-center gap-2"
                 >
                   {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Enregistrer
+                  {t("save")}
                 </button>
               </div>
             </form>

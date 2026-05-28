@@ -13,16 +13,25 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { listArticleOrders } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+} from "@/components/dashboard/dashboard-access-provider";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
+import { translate } from "@/lib/l10n";
 import type { ArticleOrder, OrderStatus } from "@/lib/types/article-orders";
+import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
+import { subscribeToArticleOrders } from "@/lib/realtime/business-realtime";
+import { formatMoney } from "@/lib/currencies";
 
-const STATUS_FILTER: { value: "all" | OrderStatus; label: string }[] = [
-  { value: "all", label: "Toutes" },
-  { value: "open", label: "Ouvertes" },
-  { value: "received", label: "Reçues" },
-  { value: "cancelled", label: "Annulées" },
+const STATUS_FILTER: { value: "all" | OrderStatus; labelKey: string }[] = [
+  { value: "all", labelKey: "all" },
+  { value: "open", labelKey: "openOrders" },
+  { value: "received", labelKey: "received" },
+  { value: "cancelled", labelKey: "cancelled" },
 ];
+const ORDERS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function statusBadge(status: OrderStatus) {
   const map: Record<OrderStatus, string> = {
@@ -43,11 +52,24 @@ function statusBadge(status: OrderStatus) {
 }
 
 export default function OrdersPage() {
+  return (
+    <SalesOrganizationGate description="Les commandes fournisseur sont disponibles uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut acceder aux commandes fournisseur.">
+        <OrdersContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function OrdersContent() {
+  const { profile } = useMemberProfile();
+  const t = (key: string) => translate(profile?.params?.locale, key);
   const [allOrders, setAllOrders] = useState<ArticleOrder[]>([]);
   const [filter, setFilter] = useState<(typeof STATUS_FILTER)[number]["value"]>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [orgMissing, setOrgMissing] = useState(false);
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
 
   const orders = useMemo(() => {
     if (filter === "all") return allOrders;
@@ -62,16 +84,46 @@ export default function OrdersPage() {
   }, [allOrders]);
 
   const loadOrders = useCallback(async () => {
-    await loadMemberProfileForSession();
-    if (!getEffectiveOrganizationId()) {
+    const orgId = getEffectiveOrganizationId();
+    setOrganizationId(orgId);
+    if (!orgId) {
       setOrgMissing(true);
       setAllOrders([]);
       return;
     }
     setOrgMissing(false);
+    const cacheKey = `article-orders:${orgId}`;
+    const cached = getBusinessCache<ArticleOrder[]>(cacheKey);
+    if (cached) {
+      setAllOrders(cached);
+      setLoading(false);
+    }
     const list = await listArticleOrders(undefined);
     setAllOrders(list);
+    setBusinessCache(cacheKey, list, { ttlMs: ORDERS_CACHE_TTL_MS });
   }, []);
+
+  useEffect(() => {
+    if (!organizationId) return;
+    const cacheKey = `article-orders:${organizationId}`;
+    return subscribeToArticleOrders<ArticleOrder>(organizationId, (payload) => {
+      setAllOrders((current) => {
+        let next = current;
+        if (payload.eventType === "DELETE") {
+          const oldId = String(payload.old.id ?? "");
+          next = current.filter((order) => order.id !== oldId);
+        } else {
+          const incoming = payload.new as ArticleOrder;
+          const exists = current.some((order) => order.id === incoming.id);
+          next = exists
+            ? current.map((order) => (order.id === incoming.id ? incoming : order))
+            : [incoming, ...current];
+        }
+        setBusinessCache(cacheKey, next);
+        return next;
+      });
+    });
+  }, [organizationId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -110,15 +162,14 @@ export default function OrdersPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-indigo-200/90">
-                Approvisionnement
+                {t("stock")}
               </span>
             </div>
             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight mb-3">
-              Commandes fournisseur
+              {t("purchaseOrders")}
             </h1>
             <p className="text-indigo-100/90 max-w-xl text-sm sm:text-base leading-relaxed">
-              Enregistrez vos bons de commande, puis réceptionnez les livraisons pour mettre à jour le stock — avec
-              traçabilité des écarts.
+              {t("purchaseOrdersIntro")}
             </p>
           </div>
           <Link
@@ -126,7 +177,7 @@ export default function OrdersPage() {
             className="inline-flex shrink-0 items-center justify-center gap-2 px-6 py-3.5 bg-white text-[#3730A3] text-sm font-bold rounded-full shadow-lg shadow-black/10 hover:bg-indigo-50 transition"
           >
             <Plus className="w-4 h-4" />
-            Nouvelle commande
+            {t("newOrder")}
           </Link>
         </div>
       </div>
@@ -134,28 +185,28 @@ export default function OrdersPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-gray-500">Total commandes</span>
+            <span className="text-xs font-semibold text-gray-500">{t("totalOrders")}</span>
             <ClipboardList className="w-4 h-4 text-indigo-400" />
           </div>
           <p className="text-3xl font-extrabold text-gray-900">{kpis.total}</p>
         </div>
         <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-amber-800/80">Ouvertes</span>
+            <span className="text-xs font-semibold text-amber-800/80">{t("openOrders")}</span>
             <Package className="w-4 h-4 text-amber-600" />
           </div>
           <p className="text-3xl font-extrabold text-amber-900">{kpis.open}</p>
         </div>
         <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-emerald-800/80">Reçues</span>
+            <span className="text-xs font-semibold text-emerald-800/80">{t("received")}</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
           <p className="text-3xl font-extrabold text-emerald-900">{kpis.received}</p>
         </div>
         <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-slate-600">Annulées</span>
+            <span className="text-xs font-semibold text-slate-600">{t("cancelled")}</span>
             <Ban className="w-4 h-4 text-slate-500" />
           </div>
           <p className="text-3xl font-extrabold text-slate-800">{kpis.cancelled}</p>
@@ -187,7 +238,7 @@ export default function OrdersPage() {
                 : "bg-white border border-gray-200 text-gray-600 hover:border-indigo-200 hover:bg-indigo-50/50"
             }`}
           >
-            {s.label}
+            {t(s.labelKey)}
           </button>
         ))}
       </div>
@@ -202,22 +253,20 @@ export default function OrdersPage() {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 text-gray-500 gap-3">
             <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
-            <span className="text-sm font-medium">Chargement des commandes…</span>
+            <span className="text-sm font-medium">{t("loadingOrders")}</span>
           </div>
         ) : orders.length === 0 ? (
           <div className="py-20 px-6 text-center">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-300">
               <ClipboardList className="w-8 h-8" />
             </div>
-            <p className="text-lg font-semibold text-gray-900">Aucune commande</p>
-            <p className="mt-2 text-sm text-gray-500 max-w-md mx-auto">
-              Aucun résultat pour ce filtre. Créez une nouvelle commande fournisseur pour lancer un approvisionnement.
-            </p>
+            <p className="text-lg font-semibold text-gray-900">{t("noOrders")}</p>
+            <p className="mt-2 text-sm text-gray-500 max-w-md mx-auto">{t("noOrdersForFilter")}</p>
             <Link
               href="/dashboard/orders/new"
               className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-indigo-600 hover:text-indigo-800"
             >
-              Nouvelle commande
+              {t("newOrder")}
               <ArrowUpRight className="w-4 h-4" />
             </Link>
           </div>
@@ -226,11 +275,12 @@ export default function OrdersPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/80 text-left text-gray-500">
-                  <th className="px-6 py-4 font-semibold">Statut</th>
-                  <th className="px-6 py-4 font-semibold">Référence / note</th>
-                  <th className="px-6 py-4 font-semibold">Lignes</th>
-                  <th className="px-6 py-4 font-semibold">Créée</th>
-                  <th className="px-6 py-4 font-semibold text-right">Action</th>
+                  <th className="px-6 py-4 font-semibold">{t("status")}</th>
+                  <th className="px-6 py-4 font-semibold">{t("referenceNote")}</th>
+                  <th className="px-6 py-4 font-semibold">{t("lines")}</th>
+                  <th className="px-6 py-4 font-semibold">Total</th>
+                  <th className="px-6 py-4 font-semibold">{t("createdAt")}</th>
+                  <th className="px-6 py-4 font-semibold text-right">{t("actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -244,6 +294,9 @@ export default function OrdersPage() {
                       <span className="line-clamp-2 font-medium">{o.note || "Sans note"}</span>
                     </td>
                     <td className="px-6 py-4 text-gray-600 tabular-nums">{o.lines?.length ?? "—"}</td>
+                    <td className="px-6 py-4 font-bold text-gray-900 whitespace-nowrap">
+                      {formatMoney(o.total_amount, o.currency)}
+                    </td>
                     <td className="px-6 py-4 text-gray-500 whitespace-nowrap text-xs sm:text-sm">
                       {o.created_at
                         ? new Date(o.created_at).toLocaleString("fr-FR", {
@@ -257,7 +310,7 @@ export default function OrdersPage() {
                         href={`/dashboard/orders/${o.id}`}
                         className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:text-indigo-800 group-hover:underline"
                       >
-                        Détail
+                        {t("details")}
                         <ArrowUpRight className="w-3.5 h-3.5 opacity-70" />
                       </Link>
                     </td>

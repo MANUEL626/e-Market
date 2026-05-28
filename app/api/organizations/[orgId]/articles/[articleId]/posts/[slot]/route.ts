@@ -7,8 +7,9 @@ import {
 } from "@/lib/article-posts/utils";
 
 function parseSlot(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
   const n = Number.parseInt(raw, 10);
-  if (n === 1 || n === 2 || n === 3) return n;
+  if (Number.isInteger(n) && n >= 1) return n;
   return null;
 }
 
@@ -27,7 +28,7 @@ export async function PUT(
   const { orgId, articleId, slot: slotParam } = await context.params;
   const slot = parseSlot(slotParam);
   if (slot === null) {
-    return NextResponse.json({ error: "Emplacement invalide (1–3)" }, { status: 400 });
+    return NextResponse.json({ error: "Emplacement invalide : utilisez un entier >= 1" }, { status: 400 });
   }
   let rawBody: unknown;
   try {
@@ -97,7 +98,7 @@ export async function DELETE(
   const { orgId, articleId, slot: slotParam } = await context.params;
   const slot = parseSlot(slotParam);
   if (slot === null) {
-    return NextResponse.json({ error: "Emplacement invalide (1–3)" }, { status: 400 });
+    return NextResponse.json({ error: "Emplacement invalide : utilisez un entier >= 1" }, { status: 400 });
   }
   const res = await fetch(
     `${backend}/api/v1/organizations/${orgId}/articles/${articleId}/posts/${slot}`,

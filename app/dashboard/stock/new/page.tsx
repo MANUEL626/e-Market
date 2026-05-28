@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
   Image as ImageIcon,
@@ -13,9 +13,21 @@ import {
 } from "lucide-react";
 import { createArticle } from "@/lib/api/emall-client";
 import { getStoredOrganizationId } from "@/lib/organization-storage";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { getPrimaryMembership } from "@/lib/api/member-me";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+  useDashboardAccess,
+} from "@/components/dashboard/dashboard-access-provider";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { uploadOrganizationArticleImage } from "@/lib/supabase/upload-organization-article-image";
 import type { ArticleCategory, WholesalePriceTier } from "@/lib/types/article-orders";
+import {
+  API_CURRENCY_OPTIONS,
+  DEFAULT_SALE_CURRENCY,
+  normalizeApiCurrency,
+  type ApiCurrencyCode,
+} from "@/lib/currencies";
 import { ARTICLE_CATEGORY_OPTIONS } from "@/lib/dashboard/article-categories";
 import {
   newWholesaleRow,
@@ -31,12 +43,27 @@ type LocalArticleImage = {
 };
 
 export default function NewProductPage() {
+  return (
+    <SalesOrganizationGate description="L'ajout d'articles est disponible uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut ajouter un article au stock.">
+        <NewProductContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function NewProductContent() {
   const router = useRouter();
+  const { profile } = useMemberProfile();
+  const access = useDashboardAccess();
   const [orgId, setOrgId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [category, setCategory] = useState<ArticleCategory>("other");
   const [description, setDescription] = useState("");
   const [unitSalePrice, setUnitSalePrice] = useState("");
+  const [saleCurrency, setSaleCurrency] = useState<ApiCurrencyCode | "">("");
+  const [defaultSaleCurrency, setDefaultSaleCurrency] =
+    useState<ApiCurrencyCode>(DEFAULT_SALE_CURRENCY);
   const [stockQuantity, setStockQuantity] = useState("0");
   const [alertQuantity, setAlertQuantity] = useState("0");
   const [active, setActive] = useState(true);
@@ -49,21 +76,46 @@ export default function NewProductPage() {
   const [error, setError] = useState<string | null>(null);
   /** Une ligne vide par défaut pour rendre les paliers visibles (optionnel à remplir). */
   const [wholesaleRows, setWholesaleRows] = useState<WholesaleFormRow[]>([newWholesaleRow()]);
+  const activeArticlesLimitExceeded = access.isLimitExceeded("active_articles");
+  const wholesaleRowsTouched =
+    wholesaleRows.length !== 1 ||
+    Boolean(wholesaleRows[0]?.minQty || wholesaleRows[0]?.maxQty || wholesaleRows[0]?.unitPrice);
+  const hasFormChanges = useMemo(
+    () =>
+      Boolean(
+        name.trim() ||
+          category !== "other" ||
+          description.trim() ||
+          unitSalePrice.trim() ||
+          saleCurrency ||
+          stockQuantity !== "0" ||
+          alertQuantity !== "0" ||
+          !active ||
+          articleImages.length > 0 ||
+          wholesaleRowsTouched
+      ),
+    [
+      active,
+      alertQuantity,
+      articleImages.length,
+      category,
+      description,
+      name,
+      saleCurrency,
+      stockQuantity,
+      unitSalePrice,
+      wholesaleRowsTouched,
+    ]
+  );
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let id = getStoredOrganizationId();
-      if (!id) {
-        await loadMemberProfileForSession();
-        id = getStoredOrganizationId();
-      }
-      if (!cancelled) setOrgId(id);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    const id = getStoredOrganizationId();
+    const org = profile ? getPrimaryMembership(profile)?.organization : undefined;
+    setOrgId(id);
+    setDefaultSaleCurrency(
+      normalizeApiCurrency(org?.default_currencies?.sale, DEFAULT_SALE_CURRENCY)
+    );
+  }, [profile]);
 
   useEffect(() => {
     return () => {
@@ -133,6 +185,21 @@ export default function NewProductPage() {
     );
   }
 
+  function resetForm() {
+    articleImagesRef.current.forEach((item) => URL.revokeObjectURL(item.preview));
+    setName("");
+    setCategory("other");
+    setDescription("");
+    setUnitSalePrice("");
+    setSaleCurrency("");
+    setStockQuantity("0");
+    setAlertQuantity("0");
+    setActive(true);
+    setArticleImages([]);
+    setWholesaleRows([newWholesaleRow()]);
+    setError(null);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -143,6 +210,12 @@ export default function NewProductPage() {
     }
     if (!orgId) {
       setError("Organisation introuvable. Reconnectez-vous ou rechargez la page.");
+      return;
+    }
+    if (activeArticlesLimitExceeded && active) {
+      setError(
+        "La limite d'articles actifs de votre abonnement est atteinte. Creez l'article en brouillon/inactif ou changez de plan."
+      );
       return;
     }
     if (articleImages.length === 0) {
@@ -185,6 +258,7 @@ export default function NewProductPage() {
         name: trimmedName,
         category,
         unit_sale_price: price,
+        ...(saleCurrency ? { sale_currency: saleCurrency } : {}),
         ...(wholesale_prices ? { wholesale_prices } : {}),
         stock_quantity: stock,
         alert_quantity: alert,
@@ -225,14 +299,20 @@ export default function NewProductPage() {
         <div className="flex items-center gap-3">
           <Link
             href="/dashboard/stock"
+            onClick={(event) => {
+              if (hasFormChanges) {
+                event.preventDefault();
+                resetForm();
+              }
+            }}
             className="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
           >
-            Annuler
+            {hasFormChanges ? "Annuler" : "Retour"}
           </Link>
           <button
             type="submit"
             form="new-article-form"
-            disabled={submitting || !orgId}
+            disabled={submitting || !orgId || (activeArticlesLimitExceeded && active)}
             className="inline-flex items-center justify-center gap-2 px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-60 text-white text-sm font-semibold rounded-full transition shadow-sm"
           >
             {submitting ? (
@@ -246,6 +326,13 @@ export default function NewProductPage() {
           </button>
         </div>
       </div>
+
+      {activeArticlesLimitExceeded && active && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          La limite d'articles actifs de votre abonnement est atteinte. Desactivez
+          l'article pour l'enregistrer en brouillon, ou changez de plan.
+        </div>
+      )}
 
       {error && (
         <div
@@ -430,6 +517,30 @@ export default function NewProductPage() {
                     placeholder="0.00"
                     className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
                   />
+                </div>
+
+                <div>
+                  <label htmlFor="sale-currency" className="block text-sm text-gray-700 mb-2">
+                    Devise de vente
+                  </label>
+                  <select
+                    id="sale-currency"
+                    value={saleCurrency}
+                    onChange={(e) => setSaleCurrency(e.target.value as ApiCurrencyCode | "")}
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition cursor-pointer"
+                  >
+                    <option value="">
+                      Defaut organisation ({defaultSaleCurrency.toUpperCase()})
+                    </option>
+                    {API_CURRENCY_OPTIONS.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-gray-500">
+                    Par defaut, l'API utilise la devise de vente de l'organisation.
+                  </p>
                 </div>
 
                 <div className="pt-2 border-t border-gray-100">

@@ -1,37 +1,13 @@
 import Link from "next/link";
-import { Bell, Settings, PackageOpen, Banknote, Truck, Users, ArrowRight, Globe } from "lucide-react";
+import { PackageOpen, Banknote, Truck, Users, Globe } from "lucide-react";
+import { HomeAuthActions } from "@/components/home-auth-actions";
+import { PublicSiteHeader } from "@/components/public-site-header";
 
 export default function Home() {
   return (
     <div className="flex flex-col min-h-screen">
       {/* Navigation */}
-      <header className="flex items-center justify-between px-8 py-4 bg-white border-b border-gray-100">
-        <div className="flex items-center gap-8">
-          <Link href="/" className="text-xl font-bold text-gray-900 tracking-tight">
-            Indigo Marketplace
-          </Link>
-          <nav className="hidden md:flex gap-6 text-sm font-medium text-gray-500">
-            <Link href="/" className="text-indigo-600 border-b-2 border-indigo-600 pb-1">Marketplace</Link>
-            <Link href="/" className="hover:text-gray-900">Solutions</Link>
-            <Link href="/" className="hover:text-gray-900">Pricing</Link>
-          </nav>
-        </div>
-        <div className="flex items-center gap-6">
-          <button className="text-gray-400 hover:text-gray-600">
-            <Bell className="w-5 h-5" />
-          </button>
-          <button className="text-gray-400 hover:text-gray-600">
-            <Settings className="w-5 h-5" />
-          </button>
-          <div className="h-4 w-px bg-gray-200"></div>
-          <Link href="/login" className="text-sm font-medium text-gray-700 hover:text-gray-900">
-            Sign In
-          </Link>
-          <Link href="/register" className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-full hover:bg-indigo-700 transition">
-            Get Started
-          </Link>
-        </div>
-      </header>
+      <PublicSiteHeader />
 
       <main className="flex-1 bg-white">
         {/* Hero Section */}
@@ -49,12 +25,7 @@ export default function Home() {
               Indigo Marketplace provides the unified infrastructure for modern merchants. From stock management to global delivery, scale your retail empire with a single click.
             </p>
             <div className="flex items-center gap-4">
-              <Link href="/register" className="inline-flex items-center justify-center gap-2 px-6 py-3 text-base font-semibold text-white bg-[#3730A3] hover:bg-indigo-800 rounded-full transition">
-                Create a store <ArrowRight className="w-4 h-4" />
-              </Link>
-              <Link href="/login" className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-full transition">
-                Log in
-              </Link>
+              <HomeAuthActions variant="hero" />
             </div>
           </div>
           
@@ -191,9 +162,7 @@ export default function Home() {
                Join over 15,000 merchants who built their future on Indigo.
              </p>
              <div className="flex items-center justify-center gap-4">
-               <Link href="/register" className="px-8 py-3 text-base font-semibold text-white bg-gray-900 hover:bg-black rounded-full transition">
-                 Get Started Now
-               </Link>
+               <HomeAuthActions variant="cta" />
                <button className="px-8 py-3 text-base font-semibold text-gray-700 bg-transparent border border-gray-300 hover:bg-gray-100 rounded-full transition">
                  Talk to Sales
                </button>

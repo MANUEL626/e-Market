@@ -2,19 +2,23 @@
  * Règles alignées sur guide_api.md — posts promotionnels (organization-article-posts).
  */
 
-import type { OrganizationArticlePost, UpsertArticlePostPayload } from "@/lib/types/article-posts";
+import type {
+  ArticlePostProcessingStatus,
+  OrganizationArticlePost,
+  UpsertArticlePostPayload,
+} from "@/lib/types/article-posts";
 
 export const ARTICLE_POST_CAPTION_MAX = 500;
 
 export const ARTICLE_POST_BUCKET = "organization-article-posts" as const;
 
-export function isArticlePostSlot(n: number): n is 1 | 2 | 3 {
-  return n === 1 || n === 2 || n === 3;
+export function isArticlePostSlot(n: number): boolean {
+  return Number.isInteger(n) && n >= 1;
 }
 
-export function assertArticlePostSlot(slot: number): asserts slot is 1 | 2 | 3 {
+export function assertArticlePostSlot(slot: number): void {
   if (!isArticlePostSlot(slot)) {
-    throw new Error("Emplacement invalide : utilisez 1, 2 ou 3.");
+    throw new Error("Emplacement invalide : utilisez un entier superieur ou egal a 1.");
   }
 }
 
@@ -95,6 +99,26 @@ export function extractPostsArray(data: unknown): unknown[] {
   return [];
 }
 
+function normalizeNullableString(value: unknown): string | null {
+  return value === null || typeof value === "string" ? value : null;
+}
+
+function normalizeNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeProcessingStatus(value: unknown): ArticlePostProcessingStatus | null {
+  if (
+    value === "pending" ||
+    value === "processing" ||
+    value === "ready" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  return null;
+}
+
 /** Normalise un objet post renvoyé par GET / PUT. */
 export function normalizeArticlePost(raw: unknown): OrganizationArticlePost | null {
   if (!raw || typeof raw !== "object") return null;
@@ -114,8 +138,16 @@ export function normalizeArticlePost(raw: unknown): OrganizationArticlePost | nu
     slot,
     media_kind,
     media_storage_path: path,
-    caption: cap === null || typeof cap === "string" ? (cap as string | null) : null,
+    original_media_storage_path: normalizeNullableString(o.original_media_storage_path),
+    thumbnail_storage_path: normalizeNullableString(o.thumbnail_storage_path),
+    caption: normalizeNullableString(cap),
     active: o.active !== false,
+    processing_status: normalizeProcessingStatus(o.processing_status),
+    processing_error: normalizeNullableString(o.processing_error),
+    media_width: normalizeNullableNumber(o.media_width),
+    media_height: normalizeNullableNumber(o.media_height),
+    media_duration_seconds: normalizeNullableNumber(o.media_duration_seconds),
+    media_size_bytes: normalizeNullableNumber(o.media_size_bytes),
     created_at: typeof o.created_at === "string" ? o.created_at : undefined,
     updated_at: typeof o.updated_at === "string" ? o.updated_at : undefined,
   };

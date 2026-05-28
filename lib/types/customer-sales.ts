@@ -74,3 +74,18 @@ export type CustomerSaleReceiptTokenResponse = {
 export type AssignDeliveryPayload = {
   member_id: string;
 };
+
+export type CustomerSaleDeliveryTrackPoint = {
+  id: string;
+  order_id: string;
+  latitude: number;
+  longitude: number;
+  accuracy_meters: number | null;
+  recorded_at: string;
+};
+
+export type CreateDeliveryTrackPointPayload = {
+  latitude: number;
+  longitude: number;
+  accuracy_meters?: number | null;
+};

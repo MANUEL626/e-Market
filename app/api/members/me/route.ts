@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getEmallBackendBase } from "@/lib/server/emall-backend";
 import { extractApiErrorMessage } from "@/lib/api/parse-api-error";
+import { backendFetch, backendFetchErrorResponse } from "@/lib/server/backend-fetch";
 
 export async function GET(request: Request) {
   const backend = getEmallBackendBase();
@@ -13,12 +14,20 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Non authentifié" }, { status: 401 });
   }
 
-  const res = await fetch(`${backend}/api/v1/members/me`, {
-    headers: {
-      Authorization: auth,
-      Accept: "application/json",
-    },
-  });
+  let res: Response;
+  try {
+    res = await backendFetch(`${backend}/api/v1/members/me`, {
+      headers: {
+        Authorization: auth,
+        Accept: "application/json",
+      },
+    });
+  } catch (error) {
+    return backendFetchErrorResponse(
+      error,
+      "Backend indisponible pendant le chargement du profil."
+    );
+  }
 
   const text = await res.text();
   let data: unknown = {};

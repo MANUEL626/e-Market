@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { getStoredOrganizationId, setStoredOrganizationId } from "@/lib/organization-storage";
-import { setStoredMemberProfile } from "@/lib/member-profile-storage";
+import { getStoredMemberProfile, setStoredMemberProfile } from "@/lib/member-profile-storage";
 import type { MemberMeMembership, MemberMeResponse } from "@/lib/types/member-me";
 import { extractApiErrorMessage } from "@/lib/api/parse-api-error";
 
@@ -53,19 +53,45 @@ export async function fetchMemberMeWithSession(): Promise<MemberMeResponse | nul
 
 /** Met à jour l’organisation courante (première adhésion avec org résolue) et le cache profil. */
 export function applyMemberMeToClientState(data: MemberMeResponse) {
-  const first = data.memberships.find((m) => m.organization);
-  if (first?.organization_id) {
-    setStoredOrganizationId(first.organization_id);
+  const currentOrganizationId = getStoredOrganizationId();
+  const current = currentOrganizationId
+    ? data.memberships.find(
+        (m) => m.organization_id === currentOrganizationId && m.organization
+      )
+    : undefined;
+  const fallback = data.memberships.find((m) => m.organization);
+  const organizationId = current?.organization_id ?? fallback?.organization_id;
+  if (organizationId) {
+    setStoredOrganizationId(organizationId);
   }
   setStoredMemberProfile(data);
 }
 
-export async function loadMemberProfileForSession(): Promise<MemberMeResponse | null> {
-  const data = await fetchMemberMeWithSession();
-  if (data) {
-    applyMemberMeToClientState(data);
+let memberProfileInFlight: Promise<MemberMeResponse | null> | null = null;
+
+async function loadMemberProfileForSessionRequest(): Promise<MemberMeResponse | null> {
+  try {
+    const data = await fetchMemberMeWithSession();
+    if (data) {
+      applyMemberMeToClientState(data);
+    }
+    return data;
+  } catch (error) {
+    const cached = getStoredMemberProfile();
+    if (cached) {
+      return cached;
+    }
+    throw error;
   }
-  return data;
+}
+
+export async function loadMemberProfileForSession(): Promise<MemberMeResponse | null> {
+  if (!memberProfileInFlight) {
+    memberProfileInFlight = loadMemberProfileForSessionRequest().finally(() => {
+      memberProfileInFlight = null;
+    });
+  }
+  return memberProfileInFlight;
 }
 
 /** Adhésion + organisation affichées (org stockée, sinon première avec `organization` résolue). */

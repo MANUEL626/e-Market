@@ -15,6 +15,7 @@ export function getStoredMemberProfile(): MemberMeResponse | null {
 
 export function setStoredMemberProfile(data: MemberMeResponse) {
   localStorage.setItem(PROFILE_KEY, JSON.stringify(data));
+  window.dispatchEvent(new CustomEvent("e_mall_member_profile_updated", { detail: data }));
 }
 
 export function clearStoredMemberProfile() {
