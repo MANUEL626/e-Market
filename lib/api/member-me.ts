@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { getStoredOrganizationId, setStoredOrganizationId } from "@/lib/organization-storage";
-import { setStoredMemberProfile } from "@/lib/member-profile-storage";
+import { getStoredMemberProfile, setStoredMemberProfile } from "@/lib/member-profile-storage";
 import type { MemberMeMembership, MemberMeResponse } from "@/lib/types/member-me";
 import { extractApiErrorMessage } from "@/lib/api/parse-api-error";
 
@@ -67,12 +67,31 @@ export function applyMemberMeToClientState(data: MemberMeResponse) {
   setStoredMemberProfile(data);
 }
 
-export async function loadMemberProfileForSession(): Promise<MemberMeResponse | null> {
-  const data = await fetchMemberMeWithSession();
-  if (data) {
-    applyMemberMeToClientState(data);
+let memberProfileInFlight: Promise<MemberMeResponse | null> | null = null;
+
+async function loadMemberProfileForSessionRequest(): Promise<MemberMeResponse | null> {
+  try {
+    const data = await fetchMemberMeWithSession();
+    if (data) {
+      applyMemberMeToClientState(data);
+    }
+    return data;
+  } catch (error) {
+    const cached = getStoredMemberProfile();
+    if (cached) {
+      return cached;
+    }
+    throw error;
   }
-  return data;
+}
+
+export async function loadMemberProfileForSession(): Promise<MemberMeResponse | null> {
+  if (!memberProfileInFlight) {
+    memberProfileInFlight = loadMemberProfileForSessionRequest().finally(() => {
+      memberProfileInFlight = null;
+    });
+  }
+  return memberProfileInFlight;
 }
 
 /** Adhésion + organisation affichées (org stockée, sinon première avec `organization` résolue). */

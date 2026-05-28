@@ -10,7 +10,7 @@ import {
 import type { OrganizationArticlePost } from "@/lib/types/article-posts";
 import { ARTICLE_POST_CAPTION_MAX, assertCaptionWithinLimit } from "@/lib/article-posts/utils";
 import {
-  getAllPostSlots,
+  getVisiblePostSlots,
   inferArticlePostMediaKind,
 } from "@/lib/types/article-posts";
 import { uploadOrganizationArticlePostMedia } from "@/lib/supabase/upload-organization-article-post";
@@ -127,7 +127,7 @@ export function ArticlePostsEditor({
     return m;
   }, [posts]);
 
-  const visibleSlots = useMemo(() => getAllPostSlots(), []);
+  const visibleSlots = useMemo(() => getVisiblePostSlots(posts), [posts]);
 
   useEffect(() => {
     if (!posts.some(isVideoProcessing)) return;
@@ -173,7 +173,7 @@ export function ArticlePostsEditor({
           <div>
             <h2 className="text-lg font-bold text-gray-900">{t("postsShowcase")}</h2>
             <p className="mt-1 text-xs leading-relaxed text-gray-500">
-              Optionnel — jusqu’à trois médias pour mettre en avant ce produit. Un article{" "}
+              Optionnel — ajoutez autant de médias que nécessaire pour mettre en avant ce produit. Un article{" "}
               <span className="font-semibold text-gray-700">actif</span> est requis pour la vitrine
               clients.
               {!articleActive && (
@@ -185,11 +185,11 @@ export function ArticlePostsEditor({
             </p>
             <div className="mt-3 flex flex-col gap-2 border-t border-gray-100 pt-3 text-xs text-gray-600 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
               <span className="font-medium text-gray-700">
-                {posts.length} / 3 {t("postsShowcase")}
+                {posts.length} post{posts.length > 1 ? "s" : ""}
               </span>
               <span className="hidden text-gray-300 sm:inline">·</span>
               <span className="text-gray-500">
-                Les trois emplacements sont visibles pour remplir les slots 1 à 3.
+                Le prochain emplacement est ajouté automatiquement après chaque publication.
               </span>
             </div>
           </div>

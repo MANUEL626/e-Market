@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import QRCode from "qrcode";
 import { getCustomerSale, getCustomerSaleHistory, getCustomerSalePickupQr } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { SalesOrganizationGate } from "@/components/dashboard/dashboard-access-provider";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import type {
   CustomerSaleHistoryEvent,
@@ -49,6 +49,14 @@ function fulfillmentLabel(value: string | undefined) {
 }
 
 export default function CustomerSaleDetailPage() {
+  return (
+    <SalesOrganizationGate description="Le detail des ventes est disponible uniquement pour les organisations de vente.">
+      <CustomerSaleDetailContent />
+    </SalesOrganizationGate>
+  );
+}
+
+function CustomerSaleDetailContent() {
   const params = useParams();
   const orderId = params.orderId as string;
   const [mounted, setMounted] = useState(false);
@@ -78,7 +86,6 @@ export default function CustomerSaleDetailPage() {
       try {
         setLoading(true);
         setError(null);
-        await loadMemberProfileForSession();
         const [sale, saleHistory] = await Promise.all([
           getCustomerSale(orderId),
           getCustomerSaleHistory(orderId).catch(() => [] as CustomerSaleHistoryEvent[]),

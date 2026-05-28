@@ -13,10 +13,13 @@ import {
   X,
   Truck,
 } from "lucide-react";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
 import { createWalkInSale, listArticles, listCustomerSales } from "@/lib/api/emall-client";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import {
+  SalesOrganizationGate,
+  useDashboardAccess,
+} from "@/components/dashboard/dashboard-access-provider";
 import { translate } from "@/lib/i18n";
 import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
 import { subscribeToCustomerSales } from "@/lib/realtime/business-realtime";
@@ -27,8 +30,19 @@ import type {
   CustomerSaleStatusGroup,
 } from "@/lib/types/customer-sales";
 
+const SALES_CACHE_TTL_MS = 2 * 60 * 1000;
+
 export default function SalesPage() {
+  return (
+    <SalesOrganizationGate description="Les ventes client sont disponibles uniquement pour les organisations de vente.">
+      <SalesContent />
+    </SalesOrganizationGate>
+  );
+}
+
+function SalesContent() {
   const { profile } = useMemberProfile();
+  const access = useDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const [allOrders, setAllOrders] = useState<CustomerSaleOrderDetail[]>([]);
   const [statusGroup, setStatusGroup] = useState<"all" | CustomerSaleStatusGroup>("all");
@@ -45,9 +59,11 @@ export default function SalesPage() {
   const [externalCustomerLabel, setExternalCustomerLabel] = useState("");
   const [walkInNotes, setWalkInNotes] = useState("");
   const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const walkInLimitExceeded = access.isLimitExceeded("monthly_walk_in_sales");
+  const walkInUsage = access.getUsage("monthly_walk_in_sales");
+  const walkInLimit = access.getLimit("monthly_walk_in_sales");
 
   const loadSales = useCallback(async () => {
-    await loadMemberProfileForSession();
     const orgId = getEffectiveOrganizationId();
     setOrganizationId(orgId);
     if (!orgId) {
@@ -64,7 +80,7 @@ export default function SalesPage() {
     }
     const data = await listCustomerSales();
     setAllOrders(data);
-    setBusinessCache(cacheKey, data);
+    setBusinessCache(cacheKey, data, { ttlMs: SALES_CACHE_TTL_MS });
   }, []);
 
   useEffect(() => {
@@ -199,6 +215,11 @@ export default function SalesPage() {
   const submitWalkInSale = useCallback(async () => {
     try {
       setWalkInError(null);
+      if (walkInLimitExceeded) {
+        throw new Error(
+          "La limite mensuelle de ventes comptoir de votre abonnement est atteinte."
+        );
+      }
       const cleanLines = walkInLines.filter((line) => line.article_id && line.quantity > 0);
       if (cleanLines.length === 0) {
         throw new Error("Ajoute au moins un article valide avec une quantité supérieure à 0.");
@@ -222,7 +243,14 @@ export default function SalesPage() {
     } finally {
       setIsSubmittingWalkIn(false);
     }
-  }, [externalCustomerLabel, loadSales, resetWalkInForm, walkInLines, walkInNotes]);
+  }, [
+    externalCustomerLabel,
+    loadSales,
+    resetWalkInForm,
+    walkInLimitExceeded,
+    walkInLines,
+    walkInNotes,
+  ]);
 
   return (
     <div className="max-w-[1200px] mx-auto pb-12">
@@ -232,7 +260,8 @@ export default function SalesPage() {
           <button
             type="button"
             onClick={openWalkInModal}
-            className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-4 py-2 text-sm font-bold text-indigo-700 hover:bg-indigo-50"
+            disabled={walkInLimitExceeded}
+            className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-4 py-2 text-sm font-bold text-indigo-700 hover:bg-indigo-50 disabled:pointer-events-none disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
             {t("walkInSale")}
@@ -246,6 +275,14 @@ export default function SalesPage() {
           </Link>
         </div>
       </div>
+
+      {walkInLimitExceeded && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Limite de ventes comptoir atteinte
+          {walkInLimit != null ? ` (${walkInUsage ?? 0}/${walkInLimit}).` : "."} Passez a
+          un plan superieur pour creer de nouvelles ventes comptoir.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-8">
         <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">

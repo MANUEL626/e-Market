@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
@@ -10,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Loader2, Plus, Search, Send, X } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Search, Send, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { displayNameFromUser } from "@/lib/member-profile-storage";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
@@ -30,6 +29,7 @@ import type {
   MessageRow,
 } from "@/lib/types/messaging";
 import { translate } from "@/lib/i18n";
+import { useDashboardAccess } from "@/components/dashboard/dashboard-access-provider";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -137,6 +137,7 @@ function MessagesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { profile, loading: profileLoading } = useMemberProfile();
+  const access = useDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const myId = profile?.user.id;
 
@@ -164,6 +165,54 @@ function MessagesPageContent() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** Évite un double appel `openDirectConversation` (ex. React Strict Mode). */
   const withProcessingRef = useRef<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  const isMobileMessagesViewport = useCallback(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 767px)").matches;
+  }, []);
+
+  const selectConversation = useCallback(
+    (conversationId: string, options: { pushHistory?: boolean } = {}) => {
+      const pushHistory = options.pushHistory ?? true;
+      const shouldPushMobileStep =
+        pushHistory &&
+        isMobileMessagesViewport() &&
+        selectedIdRef.current !== conversationId;
+      setSelectedId(conversationId);
+      if (shouldPushMobileStep) {
+        window.history.pushState(
+          {
+            ...(window.history.state ?? {}),
+            eMallMessagesView: "thread",
+            conversationId,
+          },
+          "",
+          window.location.href
+        );
+      }
+    },
+    [isMobileMessagesViewport]
+  );
+
+  const returnToConversationList = useCallback(() => {
+    setSelectedId(null);
+    setSendErr(null);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (!isMobileMessagesViewport()) return;
+      if (!selectedIdRef.current) return;
+      returnToConversationList();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [isMobileMessagesViewport, returnToConversationList]);
 
   const refreshList = useCallback(async () => {
     setLoadingList(true);
@@ -268,7 +317,7 @@ function MessagesPageContent() {
       try {
         const { conversation_id } = await openDirectConversation(withParam);
         await refreshList();
-        setSelectedId(conversation_id);
+        selectConversation(conversation_id, { pushHistory: false });
         router.replace("/dashboard/messages", { scroll: false });
       } catch (e) {
         withProcessingRef.current = null;
@@ -278,7 +327,7 @@ function MessagesPageContent() {
         router.replace("/dashboard/messages", { scroll: false });
       }
     })();
-  }, [myId, profileLoading, refreshList, router, withParam]);
+  }, [myId, profileLoading, refreshList, router, selectConversation, withParam]);
 
   async function submitDraft() {
     const text = draft.trim();
@@ -355,7 +404,7 @@ function MessagesPageContent() {
     try {
       const { conversation_id } = await openDirectConversation(userId);
       await refreshList();
-      setSelectedId(conversation_id);
+      selectConversation(conversation_id);
       setMemberPickerOpen(false);
       setMemberFilter("");
     } catch (e) {
@@ -412,6 +461,16 @@ function MessagesPageContent() {
 
   const headerTitle = labelForHeader(detail, myId);
 
+  if (!access.hasFeature("team_customer_messaging")) {
+    return (
+      <div className="mx-auto max-w-[900px] pb-12">
+        <div className="rounded-[8px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+          La messagerie equipe/client n'est pas incluse dans l'abonnement actuel.
+        </div>
+      </div>
+    );
+  }
+
   const [supabaseReady, setSupabaseReady] = useState(true);
   useEffect(() => {
     try {
@@ -434,18 +493,22 @@ function MessagesPageContent() {
   }
 
   return (
-    <div className="max-w-[1400px] mx-auto h-[calc(100vh-144px)] min-h-[600px] bg-white rounded-[24px] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 flex overflow-hidden">
-      <div className="w-[380px] border-r border-gray-100 flex flex-col flex-shrink-0 bg-white">
-        <div className="p-6 pb-4">
+    <div className="mx-auto flex h-[calc(100vh-112px)] min-h-[520px] max-w-[1400px] overflow-hidden border border-gray-100 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] sm:h-[calc(100vh-144px)] sm:min-h-[600px] sm:rounded-[24px]">
+      <div
+        className={`w-full flex-shrink-0 flex-col border-r border-gray-100 bg-white md:flex md:w-[380px] ${
+          selectedId ? "hidden" : "flex"
+        }`}
+      >
+        <div className="p-4 pb-4 sm:p-6">
           <div className="flex items-center justify-between mb-6 gap-4">
-            <h1 className="text-2xl font-extrabold text-gray-900">{t("messagesTitle")}</h1>
+            <h1 className="text-xl font-extrabold text-gray-900 sm:text-2xl">{t("messagesTitle")}</h1>
             <button
               type="button"
               onClick={() => void openMemberPicker()}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#3730A3] hover:bg-[#2e2889] text-white text-xs font-bold transition shrink-0"
+              className="inline-flex items-center gap-2 rounded-full bg-[#3730A3] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#2e2889] sm:px-4"
             >
               <Plus className="w-4 h-4" />
-              {t("newConversation")}
+              <span className="hidden min-[380px]:inline">{t("newConversation")}</span>
             </button>
           </div>
           <div className="relative">
@@ -480,7 +543,7 @@ function MessagesPageContent() {
               <button
                 key={conv.id}
                 type="button"
-                onClick={() => setSelectedId(conv.id)}
+                onClick={() => selectConversation(conv.id)}
                 className={`relative w-full text-left flex items-center gap-4 p-4 cursor-pointer transition ${
                   selectedId === conv.id
                     ? "bg-indigo-50/50"
@@ -528,14 +591,26 @@ function MessagesPageContent() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col bg-slate-50/30 min-w-0">
-        <div className="h-20 px-8 border-b border-gray-100 flex items-center justify-between bg-white flex-shrink-0">
+      <div
+        className={`min-w-0 flex-1 flex-col bg-slate-50/30 md:flex ${
+          selectedId ? "flex" : "hidden"
+        }`}
+      >
+        <div className="h-16 border-b border-gray-100 bg-white px-4 flex items-center justify-between flex-shrink-0 sm:h-20 sm:px-8">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold shrink-0">
+            <button
+              type="button"
+              onClick={returnToConversationList}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-gray-200 text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 md:hidden"
+              aria-label="Retour aux discussions"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold shrink-0 sm:h-12 sm:w-12">
               {headerTitle.slice(0, 1).toUpperCase()}
             </div>
             <div className="min-w-0">
-              <h2 className="font-extrabold text-lg text-gray-900 leading-tight truncate">
+              <h2 className="truncate text-base font-extrabold leading-tight text-gray-900 sm:text-lg">
                 {selectedId ? headerTitle : t("selectConversation")}
               </h2>
               <p className="text-[10px] font-bold text-gray-400 tracking-widest uppercase mt-0.5">
@@ -545,7 +620,7 @@ function MessagesPageContent() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-8 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 sm:p-8">
           {!selectedId && (
             <p className="text-center text-sm text-gray-500 mt-12">
               Choisissez une conversation dans la liste ou démarrez-en une depuis la fiche d’un
@@ -613,7 +688,7 @@ function MessagesPageContent() {
           <div ref={bottomRef} />
         </div>
 
-        <div className="p-6 bg-white border-t border-gray-100 flex-shrink-0">
+        <div className="p-3 bg-white border-t border-gray-100 flex-shrink-0 sm:p-6">
           <form
             onSubmit={handleSend}
             className="bg-gray-50 border border-gray-100 rounded-full p-2 flex items-center transition focus-within:bg-white focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 shadow-sm"

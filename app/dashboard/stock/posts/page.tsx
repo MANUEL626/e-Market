@@ -9,18 +9,31 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { listArticlePosts, listArticles } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
+import { getArticlePostsCountsBatch, listArticles } from "@/lib/api/emall-client";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
-import { isAdminProfile } from "@/lib/authz";
 import { translate } from "@/lib/l10n";
-import { AdminRequired } from "@/components/dashboard/admin-required";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+  useDashboardAccess,
+} from "@/components/dashboard/dashboard-access-provider";
 import { articleCategoryLabel } from "@/lib/dashboard/article-categories";
 import { getOrganizationArticleSignedUrl } from "@/lib/supabase/organization-article-image-url";
 import type { OrganizationArticle } from "@/lib/types/article-orders";
 
 export default function StockPostsIndexPage() {
+  return (
+    <SalesOrganizationGate description="Les posts vitrine sont disponibles uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut acceder aux posts vitrine.">
+        <StockPostsIndexContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function StockPostsIndexContent() {
   const { profile } = useMemberProfile();
+  const access = useDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const [articles, setArticles] = useState<OrganizationArticle[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
@@ -30,22 +43,12 @@ export default function StockPostsIndexPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [accessLoading, setAccessLoading] = useState(true);
+  const postsFeatureEnabled = access.hasFeature("article_posts");
 
   const loadArticles = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      const profile = await loadMemberProfileForSession();
-      const allowed = isAdminProfile(profile);
-      setIsAdmin(allowed);
-      setAccessLoading(false);
-      if (!allowed) {
-        setArticles([]);
-        setThumbs({});
-        return;
-      }
       const list = await listArticles(activeOnly);
       setArticles(list);
       const map: Record<string, string | null> = {};
@@ -59,7 +62,6 @@ export default function StockPostsIndexPage() {
       setError(e instanceof Error ? e.message : "Chargement impossible");
       setArticles([]);
       setThumbs({});
-      setAccessLoading(false);
     } finally {
       setLoading(false);
     }
@@ -70,6 +72,10 @@ export default function StockPostsIndexPage() {
   }, [loadArticles]);
 
   useEffect(() => {
+    if (!postsFeatureEnabled) {
+      setPostCounts({});
+      return;
+    }
     if (articles.length === 0) {
       setPostCounts({});
       return;
@@ -83,22 +89,15 @@ export default function StockPostsIndexPage() {
       });
       setPostCounts(next);
       try {
-        const results = await Promise.all(
-          articles.map(async (a) => {
-            try {
-              const posts = await listArticlePosts(a.id);
-              return [a.id, posts.length] as const;
-            } catch {
-              return [a.id, -1] as const;
-            }
-          })
-        );
+        const ids = articles.map((a) => a.id);
+        const merged = await getArticlePostsCountsBatch(ids);
         if (cancelled) return;
-        const merged: Record<string, number> = {};
-        results.forEach(([id, n]) => {
-          merged[id] = n;
+        // si certains ids sont absents, on les met à 0 (pas d'appels individuels).
+        const out: Record<string, number> = {};
+        ids.forEach((id) => {
+          out[id] = Number.isFinite(merged[id]) ? merged[id] : 0;
         });
-        setPostCounts(merged);
+        setPostCounts(out);
       } finally {
         if (!cancelled) setCountsLoading(false);
       }
@@ -106,7 +105,7 @@ export default function StockPostsIndexPage() {
     return () => {
       cancelled = true;
     };
-  }, [articles]);
+  }, [articles, postsFeatureEnabled]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -117,21 +116,6 @@ export default function StockPostsIndexPage() {
       return name.includes(q) || cat.includes(q);
     });
   }, [articles, filter]);
-
-  if (accessLoading) {
-    return (
-      <div className="mx-auto flex max-w-[1200px] items-center justify-center gap-2 pb-12 pt-24 text-gray-500">
-        <Loader2 className="h-6 w-6 animate-spin" />
-        {t("verifyAccess")}
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <AdminRequired description="Seul un administrateur peut acceder aux posts vitrine." />
-    );
-  }
 
   return (
     <div className="mx-auto max-w-[1200px] pb-12">
@@ -258,13 +242,13 @@ export default function StockPostsIndexPage() {
                             <span className="text-amber-600">Erreur</span>
                           ) : (
                             <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-bold text-indigo-800">
-                              {cnt ?? 0} / 3
+                              {cnt ?? 0} posts
                             </span>
                           )}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <Link
-                            href={`/dashboard/stock/posts/${a.id}`}
+                            href={`/dashboard/stock/posts/${a.id}?from=posts`}
                             className="inline-flex items-center gap-1.5 rounded-full bg-[#3730A3] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#2e2889]"
                           >
                             <Megaphone className="h-3.5 w-3.5" />

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
   Image as ImageIcon,
@@ -21,15 +21,25 @@ import {
   type WholesaleFormRow,
 } from "@/lib/dashboard/article-wholesale-form";
 import { getStoredOrganizationId } from "@/lib/organization-storage";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
-import { isAdminProfile } from "@/lib/authz";
-import { AdminRequired } from "@/components/dashboard/admin-required";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+  useDashboardAccess,
+} from "@/components/dashboard/dashboard-access-provider";
 import { uploadOrganizationArticleImage } from "@/lib/supabase/upload-organization-article-image";
 import { getOrganizationArticleSignedUrl } from "@/lib/supabase/organization-article-image-url";
 import type { ArticleCategory, WholesalePriceTier } from "@/lib/types/article-orders";
 import { validateContiguousWholesaleTiers } from "@/lib/validation/wholesale-tiers";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
+import { getPrimaryMembership } from "@/lib/api/member-me";
 import { translate } from "@/lib/i18n";
+import {
+  API_CURRENCY_OPTIONS,
+  DEFAULT_SALE_CURRENCY,
+  isApiCurrencyCode,
+  normalizeApiCurrency,
+  type ApiCurrencyCode,
+} from "@/lib/currencies";
 
 type GalleryRemote = {
   id: string;
@@ -45,16 +55,38 @@ type GalleryLocal = {
 };
 type GalleryItem = GalleryRemote | GalleryLocal;
 
+type ArticleFormSnapshot = {
+  name: string;
+  category: ArticleCategory;
+  description: string;
+  unitSalePrice: string;
+  saleCurrency: ApiCurrencyCode | "";
+  stockQuantity: string;
+  alertQuantity: string;
+  active: boolean;
+  wholesaleRows: WholesaleFormRow[];
+  gallery: GalleryRemote[];
+};
+
 export default function ProductInfoEditPage() {
+  return (
+    <SalesOrganizationGate description="La gestion des articles est disponible uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut modifier un article du stock.">
+        <ProductInfoEditContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function ProductInfoEditContent() {
   const { profile } = useMemberProfile();
+  const access = useDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const params = useParams();
   const router = useRouter();
   const articleId = typeof params.id === "string" ? params.id : "";
 
   const [orgId, setOrgId] = useState<string | null>(null);
-  const [accessLoading, setAccessLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -64,11 +96,16 @@ export default function ProductInfoEditPage() {
   const [category, setCategory] = useState<ArticleCategory>("other");
   const [description, setDescription] = useState("");
   const [unitSalePrice, setUnitSalePrice] = useState("");
+  const [saleCurrency, setSaleCurrency] = useState<ApiCurrencyCode | "">("");
+  const [defaultSaleCurrency, setDefaultSaleCurrency] =
+    useState<ApiCurrencyCode>(DEFAULT_SALE_CURRENCY);
   const [stockQuantity, setStockQuantity] = useState("0");
   const [alertQuantity, setAlertQuantity] = useState("0");
   const [active, setActive] = useState(true);
   const [wholesaleRows, setWholesaleRows] = useState<WholesaleFormRow[]>([newWholesaleRow()]);
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [initialForm, setInitialForm] = useState<ArticleFormSnapshot | null>(null);
+  const activeArticlesLimitExceeded = access.isLimitExceeded("active_articles");
   const galleryRef = useRef<GalleryItem[]>([]);
   galleryRef.current = gallery;
 
@@ -83,30 +120,18 @@ export default function ProductInfoEditPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const profile = await loadMemberProfileForSession();
-        const id = getStoredOrganizationId();
-        if (!cancelled) {
-          setIsAdmin(isAdminProfile(profile));
-          setOrgId(id);
-          setAccessLoading(false);
-        }
-      } catch {
-        if (!cancelled) {
-          setIsAdmin(false);
-          setAccessLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setOrgId(getStoredOrganizationId());
   }, []);
 
   useEffect(() => {
-    if (!articleId || accessLoading || !isAdmin) return;
+    const org = profile ? getPrimaryMembership(profile)?.organization : undefined;
+    setDefaultSaleCurrency(
+      normalizeApiCurrency(org?.default_currencies?.sale, DEFAULT_SALE_CURRENCY)
+    );
+  }, [profile]);
+
+  useEffect(() => {
+    if (!articleId) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -114,18 +139,30 @@ export default function ProductInfoEditPage() {
       try {
         const a = await getArticle(articleId);
         if (cancelled) return;
-        setName(a.name ?? "");
-        setCategory((a.category as ArticleCategory) ?? "other");
-        setDescription(a.description ?? "");
-        setUnitSalePrice(
+        const nextName = a.name ?? "";
+        const nextCategory = (a.category as ArticleCategory) ?? "other";
+        const nextDescription = a.description ?? "";
+        const nextUnitSalePrice =
           a.unit_sale_price != null && !Number.isNaN(a.unit_sale_price)
             ? String(a.unit_sale_price)
-            : ""
-        );
-        setStockQuantity(String(a.stock_quantity ?? 0));
-        setAlertQuantity(String(a.alert_quantity ?? 0));
-        setActive(a.active !== false);
-        setWholesaleRows(wholesaleTiersToRows(a.wholesale_prices));
+            : "";
+        const nextSaleCurrency = isApiCurrencyCode(a.sale_currency)
+          ? a.sale_currency.toLowerCase() as ApiCurrencyCode
+          : "";
+        const nextStockQuantity = String(a.stock_quantity ?? 0);
+        const nextAlertQuantity = String(a.alert_quantity ?? 0);
+        const nextActive = a.active !== false;
+        const nextWholesaleRows = wholesaleTiersToRows(a.wholesale_prices);
+
+        setName(nextName);
+        setCategory(nextCategory);
+        setDescription(nextDescription);
+        setUnitSalePrice(nextUnitSalePrice);
+        setSaleCurrency(nextSaleCurrency);
+        setStockQuantity(nextStockQuantity);
+        setAlertQuantity(nextAlertQuantity);
+        setActive(nextActive);
+        setWholesaleRows(nextWholesaleRows);
 
         const paths = [
           a.primary_image_storage_path,
@@ -134,19 +171,42 @@ export default function ProductInfoEditPage() {
 
         if (!paths.length) {
           setGallery([]);
+          setInitialForm({
+            name: nextName,
+            category: nextCategory,
+            description: nextDescription,
+            unitSalePrice: nextUnitSalePrice,
+            saleCurrency: nextSaleCurrency,
+            stockQuantity: nextStockQuantity,
+            alertQuantity: nextAlertQuantity,
+            active: nextActive,
+            wholesaleRows: nextWholesaleRows,
+            gallery: [],
+          });
         } else {
           const urls = await Promise.all(
             paths.map((p) => getOrganizationArticleSignedUrl(p))
           );
           if (cancelled) return;
-          setGallery(
-            paths.map((path, i) => ({
+          const remoteGallery = paths.map((path, i) => ({
               id: crypto.randomUUID(),
               type: "remote" as const,
               path,
               displayUrl: urls[i] ?? null,
-            }))
-          );
+            }));
+          setGallery(remoteGallery);
+          setInitialForm({
+            name: nextName,
+            category: nextCategory,
+            description: nextDescription,
+            unitSalePrice: nextUnitSalePrice,
+            saleCurrency: nextSaleCurrency,
+            stockQuantity: nextStockQuantity,
+            alertQuantity: nextAlertQuantity,
+            active: nextActive,
+            wholesaleRows: nextWholesaleRows,
+            gallery: remoteGallery,
+          });
         }
       } catch (e) {
         if (!cancelled) {
@@ -159,7 +219,59 @@ export default function ProductInfoEditPage() {
     return () => {
       cancelled = true;
     };
-  }, [accessLoading, articleId, isAdmin]);
+  }, [articleId]);
+
+  const hasFormChanges = useMemo(() => {
+    if (!initialForm) return false;
+    const gallerySignature = gallery
+      .map((item) => (item.type === "remote" ? `remote:${item.path}` : `local:${item.file.name}:${item.file.size}`))
+      .join("|");
+    const initialGallerySignature = initialForm.gallery
+      .map((item) => `remote:${item.path}`)
+      .join("|");
+    return (
+      name !== initialForm.name ||
+      category !== initialForm.category ||
+      description !== initialForm.description ||
+      unitSalePrice !== initialForm.unitSalePrice ||
+      saleCurrency !== initialForm.saleCurrency ||
+      stockQuantity !== initialForm.stockQuantity ||
+      alertQuantity !== initialForm.alertQuantity ||
+      active !== initialForm.active ||
+      JSON.stringify(wholesaleRows) !== JSON.stringify(initialForm.wholesaleRows) ||
+      gallerySignature !== initialGallerySignature
+    );
+  }, [
+    active,
+    alertQuantity,
+    category,
+    description,
+    gallery,
+    initialForm,
+    name,
+    saleCurrency,
+    stockQuantity,
+    unitSalePrice,
+    wholesaleRows,
+  ]);
+
+  function resetFormToInitial() {
+    if (!initialForm) return;
+    galleryRef.current.forEach((item) => {
+      if (item.type === "local") URL.revokeObjectURL(item.preview);
+    });
+    setName(initialForm.name);
+    setCategory(initialForm.category);
+    setDescription(initialForm.description);
+    setUnitSalePrice(initialForm.unitSalePrice);
+    setSaleCurrency(initialForm.saleCurrency);
+    setStockQuantity(initialForm.stockQuantity);
+    setAlertQuantity(initialForm.alertQuantity);
+    setActive(initialForm.active);
+    setWholesaleRows(initialForm.wholesaleRows);
+    setGallery(initialForm.gallery);
+    setSaveError(null);
+  }
 
   const appendLocals = useCallback((fileList: FileList | null) => {
     if (!fileList?.length) return;
@@ -240,6 +352,12 @@ export default function ProductInfoEditPage() {
       setSaveError("Ajoutez au moins une image (la première est la couverture).");
       return;
     }
+    if (activeArticlesLimitExceeded && active && initialForm?.active === false) {
+      setSaveError(
+        "La limite d'articles actifs de votre abonnement est atteinte. L'article peut rester inactif ou vous pouvez changer de plan."
+      );
+      return;
+    }
 
     const price = parseNonNegativeNumber(unitSalePrice, NaN);
     if (Number.isNaN(price)) {
@@ -273,6 +391,7 @@ export default function ProductInfoEditPage() {
         name: trimmedName,
         category,
         unit_sale_price: price,
+        sale_currency: saleCurrency || defaultSaleCurrency,
         wholesale_prices,
         stock_quantity: stock,
         alert_quantity: alert,
@@ -296,21 +415,6 @@ export default function ProductInfoEditPage() {
       <div className="max-w-[1200px] mx-auto pb-12 text-rose-600 text-sm">
         Identifiant d’article manquant.
       </div>
-    );
-  }
-
-  if (accessLoading) {
-    return (
-      <div className="max-w-[1200px] mx-auto pb-12 flex items-center justify-center gap-2 text-gray-500 py-24">
-        <Loader2 className="w-6 h-6 animate-spin" />
-        Verification des droits...
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <AdminRequired description="Seul un administrateur peut modifier un article du stock." />
     );
   }
 
@@ -363,9 +467,15 @@ export default function ProductInfoEditPage() {
         <div className="flex items-center gap-3">
           <Link
             href="/dashboard/stock"
+            onClick={(event) => {
+              if (hasFormChanges) {
+                event.preventDefault();
+                resetFormToInitial();
+              }
+            }}
             className="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
           >
-            Annuler
+            {hasFormChanges ? "Annuler" : "Retour"}
           </Link>
           <button
             type="submit"
@@ -511,13 +621,13 @@ export default function ProductInfoEditPage() {
                   <div>
                     <h2 className="text-lg font-bold text-gray-900">{t("postsShowcase")}</h2>
                     <p className="mt-1 text-xs text-gray-600">
-                      Gérez les contenus promotionnels (jusqu’à 3 par article) sur une page dédiée pour une
+                      Gérez les contenus promotionnels sur une page dédiée pour une
                       vue d’ensemble de tous les articles.
                     </p>
                   </div>
                 </div>
                 <Link
-                  href={`/dashboard/stock/posts/${articleId}`}
+                  href={`/dashboard/stock/posts/${articleId}?from=stock`}
                   className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-[#3730A3] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#2e2889]"
                 >
                   <Megaphone className="h-4 w-4" />
@@ -584,6 +694,26 @@ export default function ProductInfoEditPage() {
                     onChange={(e) => setUnitSalePrice(e.target.value)}
                     className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm font-semibold focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
                   />
+                </div>
+                <div>
+                  <label htmlFor="edit-sale-currency" className="block text-sm text-gray-700 mb-2">
+                    Devise de vente
+                  </label>
+                  <select
+                    id="edit-sale-currency"
+                    value={saleCurrency}
+                    onChange={(e) => setSaleCurrency(e.target.value as ApiCurrencyCode | "")}
+                    className="w-full bg-gray-50 border border-transparent rounded-xl py-3 px-4 text-sm focus:outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition cursor-pointer"
+                  >
+                    <option value="">
+                      Defaut organisation ({defaultSaleCurrency.toUpperCase()})
+                    </option>
+                    {API_CURRENCY_OPTIONS.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label htmlFor="edit-cat" className="block text-sm text-gray-700 mb-2">

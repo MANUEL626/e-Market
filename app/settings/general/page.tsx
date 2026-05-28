@@ -6,12 +6,25 @@ import Link from "next/link";
 import { Camera, Loader2, Save } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { getPrimaryMembership } from "@/lib/api/member-me";
+import {
+  getOrganizationSubscription,
+  type OrganizationSubscription,
+  type OrganizationSubscriptionEntitlements,
+} from "@/lib/api/emall-client";
 import { isAdminMembership } from "@/lib/authz";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { getAvatarPublicUrl } from "@/lib/supabase/avatar-url";
 import { uploadOrganizationAvatar } from "@/lib/supabase/upload-avatar";
 import { orgTypeLabel } from "@/lib/settings-member-labels";
 import { translate } from "@/lib/i18n";
+import {
+  API_CURRENCY_OPTIONS,
+  DEFAULT_PURCHASE_CURRENCY,
+  DEFAULT_SALE_CURRENCY,
+  normalizeApiCurrency,
+  type ApiCurrencyCode,
+} from "@/lib/currencies";
+import { useOptionalDashboardAccess } from "@/components/dashboard/dashboard-access-provider";
 
 const COUNTRY_OPTIONS = [
   { code: "BJ", label: "Benin" },
@@ -43,6 +56,30 @@ function normalizeCountries(countries: string[]): string[] {
   );
 }
 
+function planLabel(code: string | null | undefined) {
+  if (!code) return "-";
+  return code.charAt(0).toUpperCase() + code.slice(1);
+}
+
+function statusLabel(status: string | null | undefined) {
+  switch (status) {
+    case "active":
+      return "Actif";
+    case "trialing":
+      return "Essai";
+    case "past_due":
+      return "Paiement en retard";
+    case "canceled":
+      return "Annule";
+    case "expired":
+      return "Expire";
+    case "suspended":
+      return "Suspendu";
+    default:
+      return status ?? "-";
+  }
+}
+
 async function getAccessToken(): Promise<string> {
   const supabase = createClient();
   const {
@@ -67,6 +104,7 @@ async function readApiError(res: Response): Promise<string> {
 
 export default function GeneralSettingsPage() {
   const { profile, loading, refreshProfile } = useMemberProfile();
+  const dashboardAccess = useOptionalDashboardAccess();
   const primary = profile ? getPrimaryMembership(profile) : undefined;
   const org = primary?.organization;
   const t = (key: string) => translate(profile?.params?.locale, key);
@@ -75,17 +113,66 @@ export default function GeneralSettingsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [countries, setCountries] = useState<string[]>([]);
+  const [purchaseCurrency, setPurchaseCurrency] =
+    useState<ApiCurrencyCode>(DEFAULT_PURCHASE_CURRENCY);
+  const [saleCurrency, setSaleCurrency] = useState<ApiCurrencyCode>(DEFAULT_SALE_CURRENCY);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [subscription, setSubscription] = useState<OrganizationSubscription | null>(null);
+  const [entitlements, setEntitlements] =
+    useState<OrganizationSubscriptionEntitlements | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
 
   useEffect(() => {
     setName(org?.name ?? "");
     setDescription(org?.description ?? "");
     setCountries(normalizeCountries(org?.countries ?? []));
+    setPurchaseCurrency(
+      normalizeApiCurrency(org?.default_currencies?.purchase, DEFAULT_PURCHASE_CURRENCY)
+    );
+    setSaleCurrency(
+      normalizeApiCurrency(org?.default_currencies?.sale, DEFAULT_SALE_CURRENCY)
+    );
   }, [org]);
+
+  useEffect(() => {
+    setEntitlements(dashboardAccess?.subscriptionEntitlements ?? null);
+  }, [dashboardAccess?.subscriptionEntitlements]);
+
+  useEffect(() => {
+    if (!primary?.organization_id) {
+      setSubscription(null);
+      setSubscriptionError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSubscriptionLoading(true);
+    setSubscriptionError(null);
+    getOrganizationSubscription(primary.organization_id)
+      .then((subscriptionData) => {
+        if (cancelled) return;
+        setSubscription(subscriptionData);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSubscription(null);
+        setSubscriptionError(
+          err instanceof Error ? err.message : "Abonnement indisponible."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setSubscriptionLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [primary?.organization_id]);
 
   useEffect(() => {
     if (!avatarFile) {
@@ -109,6 +196,9 @@ export default function GeneralSettingsPage() {
       name.trim() !== org.name ||
       description.trim() !== (org.description ?? "") ||
       normalizedCountries.join("|") !== originalCountries.join("|") ||
+      purchaseCurrency !==
+        normalizeApiCurrency(org.default_currencies?.purchase, DEFAULT_PURCHASE_CURRENCY) ||
+      saleCurrency !== normalizeApiCurrency(org.default_currencies?.sale, DEFAULT_SALE_CURRENCY) ||
       Boolean(avatarFile)
     );
   }, [
@@ -118,6 +208,8 @@ export default function GeneralSettingsPage() {
     normalizedCountries,
     org,
     originalCountries,
+    purchaseCurrency,
+    saleCurrency,
   ]);
   const canSubmit = Boolean(org && canEdit && hasOrganizationChanges && !saving);
 
@@ -175,6 +267,10 @@ export default function GeneralSettingsPage() {
           description: description.trim() || null,
           profile_picture: profilePicture,
           countries: normalizedCountries,
+          default_currencies: {
+            purchase: purchaseCurrency,
+            sale: saleCurrency,
+          },
         }),
       });
 
@@ -342,6 +438,45 @@ export default function GeneralSettingsPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
               <div>
+                <label htmlFor="purchase-currency" className="block text-xs font-semibold text-gray-600 mb-2">
+                  Devise des achats
+                </label>
+                <select
+                  id="purchase-currency"
+                  value={purchaseCurrency}
+                  onChange={(event) => setPurchaseCurrency(event.target.value as ApiCurrencyCode)}
+                  disabled={!canEdit}
+                  className="w-full bg-gray-50 border border-gray-100 rounded-xl py-3 px-4 text-sm text-gray-800 disabled:cursor-not-allowed disabled:text-gray-500"
+                >
+                  {API_CURRENCY_OPTIONS.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="sale-currency" className="block text-xs font-semibold text-gray-600 mb-2">
+                  Devise des ventes
+                </label>
+                <select
+                  id="sale-currency"
+                  value={saleCurrency}
+                  onChange={(event) => setSaleCurrency(event.target.value as ApiCurrencyCode)}
+                  disabled={!canEdit}
+                  className="w-full bg-gray-50 border border-gray-100 rounded-xl py-3 px-4 text-sm text-gray-800 disabled:cursor-not-allowed disabled:text-gray-500"
+                >
+                  {API_CURRENCY_OPTIONS.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+              <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-2">{t("organizationId")}</label>
                 <input
                   type="text"
@@ -414,14 +549,39 @@ export default function GeneralSettingsPage() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-extrabold text-gray-900">{t("activeOffer")}</h3>
               <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[9px] font-extrabold tracking-widest uppercase rounded-md border border-indigo-100">
-                Pro Plus
+                {subscriptionLoading
+                  ? "..."
+                  : statusLabel(entitlements?.status ?? subscription?.status)}
               </span>
             </div>
-            <div className="flex items-end gap-1 mb-2">
-              <div className="text-4xl font-black text-gray-900">$149</div>
-              <div className="text-sm font-medium text-gray-500 pb-1">/mo</div>
-            </div>
-            <p className="text-[11px] text-gray-500 mb-6">Next billing date: Oct 24, 2023</p>
+            {subscriptionLoading ? (
+              <div className="mb-6 flex items-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Chargement de l'abonnement...
+              </div>
+            ) : subscriptionError ? (
+              <p className="mb-6 text-sm font-semibold text-rose-700">
+                {subscriptionError}
+              </p>
+            ) : (
+              <>
+                <div className="mb-2 text-4xl font-black text-gray-900">
+                  {subscription?.plan_details?.name ??
+                    planLabel(entitlements?.plan ?? subscription?.plan)}
+                </div>
+                <p className="mb-6 text-[11px] text-gray-500">
+                  Source : abonnement interne API
+                  {subscription?.current_period_end
+                    ? ` · fin de periode ${formatDateFr(subscription.current_period_end)}`
+                    : ""}
+                </p>
+                {entitlements?.is_active === false && (
+                  <p className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                    Abonnement inactif : certaines fonctionnalites peuvent etre limitees.
+                  </p>
+                )}
+              </>
+            )}
             <Link
               href="/settings/billing"
               className="block w-full py-2.5 border border-gray-200 text-gray-700 hover:bg-gray-50 font-bold text-sm rounded-full transition shadow-sm text-center"

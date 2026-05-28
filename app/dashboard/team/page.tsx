@@ -28,6 +28,7 @@ import type { OrganizationSubscriber } from "@/lib/types/organization-subscriber
 import { translate } from "@/lib/i18n";
 import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
 import { subscribeToOrganizationMembers } from "@/lib/realtime/business-realtime";
+import { useOptionalDashboardAccess } from "@/components/dashboard/dashboard-access-provider";
 
 const SUBSCRIBERS_PAGE_SIZE = 20;
 
@@ -82,11 +83,15 @@ function canManageTeam(
 
 export default function TeamPage() {
   const { profile, loading: profileLoading } = useMemberProfile();
+  const dashboardAccess = useOptionalDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const primary = profile ? getPrimaryMembership(profile) : undefined;
   const manage = canManageTeam(primary);
   const activeMember = Boolean(primary?.activity_status);
   const organizationId = primary?.organization_id ?? null;
+  const teamLimitExceeded = Boolean(dashboardAccess?.isLimitExceeded("team_members"));
+  const teamUsage = dashboardAccess?.getUsage("team_members");
+  const teamLimit = dashboardAccess?.getLimit("team_members");
 
   const [tab, setTab] = useState<TeamTab>("members");
   const [members, setMembers] = useState<OrganizationMember[]>([]);
@@ -176,6 +181,12 @@ export default function TeamPage() {
   async function submitInvite(e: React.FormEvent) {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
+    if (teamLimitExceeded) {
+      setInviteErr(
+        "La limite de membres de votre abonnement est atteinte. Changez de plan avant d'inviter un nouveau membre."
+      );
+      return;
+    }
     setInviteBusy(true);
     setInviteErr(null);
     setInviteOk(null);
@@ -302,16 +313,25 @@ export default function TeamPage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              disabled={teamLimitExceeded}
               onClick={() => {
                 setInviteOpen(true);
                 setInviteErr(null);
                 setInviteOk(null);
               }}
-              className="flex items-center gap-2 px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] text-white text-sm font-bold rounded-full transition shadow-sm"
+              className="flex items-center gap-2 px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-50 disabled:pointer-events-none text-white text-sm font-bold rounded-full transition shadow-sm"
             >
               <Plus className="w-4 h-4" /> {t("inviteMember")}
             </button>
           </div>
+        </div>
+      )}
+
+      {manage && tab === "members" && teamLimitExceeded && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Limite de membres atteinte
+          {teamLimit != null ? ` (${teamUsage ?? 0}/${teamLimit}).` : "."} Passez a
+          un plan superieur pour inviter d'autres membres.
         </div>
       )}
 
@@ -574,7 +594,7 @@ export default function TeamPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={inviteBusy}
+                  disabled={inviteBusy || teamLimitExceeded}
                   className="px-6 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-60 text-white text-sm font-bold rounded-full transition flex items-center gap-2"
                 >
                   {inviteBusy && <Loader2 className="w-4 h-4 animate-spin" />}

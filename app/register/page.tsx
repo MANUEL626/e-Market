@@ -16,6 +16,12 @@ import {
 } from "lucide-react";
 import { setStoredOrganizationId } from "@/lib/organization-storage";
 import { createClient } from "@/lib/supabase/client";
+import {
+  API_CURRENCY_OPTIONS,
+  DEFAULT_PURCHASE_CURRENCY,
+  DEFAULT_SALE_CURRENCY,
+  type ApiCurrencyCode,
+} from "@/lib/currencies";
 const CATEGORY_LABELS: Record<string, string> = {
   sales: "Vente (commerce)",
   delivery: "Livraison / logistique",
@@ -93,6 +99,8 @@ export default function RegisterPage() {
     category: "" as "" | "sales" | "delivery",
     description: "",
     countries: ["BJ"],
+    purchaseCurrency: DEFAULT_PURCHASE_CURRENCY,
+    saleCurrency: DEFAULT_SALE_CURRENCY,
     firstName: "",
     lastName: "",
     username: "",
@@ -288,6 +296,10 @@ export default function RegisterPage() {
       organization_description: formData.description.trim() || null,
       organization_profile_picture: null,
       organization_countries: normalizeCountries(formData.countries),
+      organization_default_currencies: {
+        purchase: formData.purchaseCurrency,
+        sale: formData.saleCurrency,
+      },
       member_first_name: formData.firstName.trim() || null,
       member_last_name: formData.lastName.trim() || null,
       member_username: formData.username.trim() || null,
@@ -370,6 +382,12 @@ export default function RegisterPage() {
       : formData.category || "—";
   const localeLabel =
     LOCALE_OPTIONS.find((locale) => locale.code === formData.locale)?.label ?? formData.locale;
+  const purchaseCurrencyLabel =
+    API_CURRENCY_OPTIONS.find((currency) => currency.code === formData.purchaseCurrency)?.label ??
+    formData.purchaseCurrency;
+  const saleCurrencyLabel =
+    API_CURRENCY_OPTIONS.find((currency) => currency.code === formData.saleCurrency)?.label ??
+    formData.saleCurrency;
 
   return (
     <div className="flex flex-col min-h-screen bg-[#f8fafc] items-center py-16 px-4">
@@ -576,6 +594,57 @@ export default function RegisterPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-bold text-gray-900 mb-2">
+                      Devise des achats
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={formData.purchaseCurrency}
+                        onChange={(e) =>
+                          updateForm("purchaseCurrency", e.target.value as ApiCurrencyCode)
+                        }
+                        className="appearance-none w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                      >
+                        {API_CURRENCY_OPTIONS.map((currency) => (
+                          <option key={currency.code} value={currency.code}>
+                            {currency.label}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">
+                        <ChevronDown className="w-4 h-4 text-gray-500" />
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-xs text-gray-500">Commandes fournisseur</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-900 mb-2">
+                      Devise des ventes
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={formData.saleCurrency}
+                        onChange={(e) =>
+                          updateForm("saleCurrency", e.target.value as ApiCurrencyCode)
+                        }
+                        className="appearance-none w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                      >
+                        {API_CURRENCY_OPTIONS.map((currency) => (
+                          <option key={currency.code} value={currency.code}>
+                            {currency.label}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">
+                        <ChevronDown className="w-4 h-4 text-gray-500" />
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-xs text-gray-500">Articles et ventes client</p>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-sm font-bold text-gray-900 mb-2 flex justify-between">
                     Brief Description <span className="text-gray-400 font-normal">(Optional)</span>
@@ -719,6 +788,16 @@ export default function RegisterPage() {
                     <div className="text-gray-500">Pays</div>
                     <div className="font-semibold text-gray-900 text-right">
                       {normalizeCountries(formData.countries).join(", ") || "—"}
+                    </div>
+
+                    <div className="text-gray-500">Devise achats</div>
+                    <div className="font-semibold text-gray-900 text-right">
+                      {purchaseCurrencyLabel}
+                    </div>
+
+                    <div className="text-gray-500">Devise ventes</div>
+                    <div className="font-semibold text-gray-900 text-right">
+                      {saleCurrencyLabel}
                     </div>
 
                     <div className="text-gray-500">Photo organisation</div>

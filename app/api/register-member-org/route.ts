@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  DEFAULT_PURCHASE_CURRENCY,
+  DEFAULT_SALE_CURRENCY,
+  normalizeApiCurrency,
+} from "@/lib/currencies";
 
 function getBackendUrl(): string | undefined {
   const raw = process.env.E_MALL_API_URL?.trim();
@@ -27,6 +32,20 @@ function normalizeLocale(value: unknown): "fr" | "en" | "de" | "zh" {
   return value === "en" || value === "de" || value === "zh" ? value : "fr";
 }
 
+function normalizeDefaultCurrencies(value: unknown): { purchase: string; sale: string } {
+  if (!value || typeof value !== "object") {
+    return {
+      purchase: DEFAULT_PURCHASE_CURRENCY,
+      sale: DEFAULT_SALE_CURRENCY,
+    };
+  }
+  const input = value as Record<string, unknown>;
+  return {
+    purchase: normalizeApiCurrency(input.purchase, DEFAULT_PURCHASE_CURRENCY),
+    sale: normalizeApiCurrency(input.sale, DEFAULT_SALE_CURRENCY),
+  };
+}
+
 function buildRegisterPayload(body: unknown): Record<string, unknown> | null {
   if (!body || typeof body !== "object") return null;
   const input = body as Record<string, unknown>;
@@ -50,6 +69,9 @@ function buildRegisterPayload(body: unknown): Record<string, unknown> | null {
     organization_description: optionalString(input.organization_description),
     organization_profile_picture: optionalString(input.organization_profile_picture),
     organization_countries: normalizeCountries(input.organization_countries),
+    organization_default_currencies: normalizeDefaultCurrencies(
+      input.organization_default_currencies
+    ),
     member_first_name: optionalString(input.member_first_name),
     member_last_name: optionalString(input.member_last_name),
     member_username: optionalString(input.member_username),

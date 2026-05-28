@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   Banknote,
   CheckCircle2,
@@ -11,6 +10,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { HomeAuthActions } from "@/components/home-auth-actions";
+import { PublicSiteHeader } from "@/components/public-site-header";
 
 type SolutionCard = {
   title: string;
@@ -61,21 +61,7 @@ const solutions: SolutionCard[] = [
 export default function SolutionsPage() {
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      <header className="flex items-center justify-between border-b border-gray-100 bg-white px-8 py-4">
-        <div className="flex items-center gap-8">
-          <Link href="/" className="text-xl font-bold tracking-tight text-gray-900">
-            Indigo Marketplace
-          </Link>
-          <nav className="hidden gap-6 text-sm font-medium text-gray-500 md:flex">
-            <Link href="/" className="hover:text-gray-900">Marketplace</Link>
-            <Link href="/solutions" className="border-b-2 border-indigo-600 pb-1 text-indigo-600">Solutions</Link>
-            <Link href="/pricing" className="hover:text-gray-900">Pricing</Link>
-          </nav>
-        </div>
-        <div className="flex items-center gap-6">
-          <HomeAuthActions variant="header" />
-        </div>
-      </header>
+      <PublicSiteHeader />
 
       <main className="flex-1">
         <section className="mx-auto grid max-w-7xl grid-cols-1 items-center gap-12 px-8 py-20 lg:grid-cols-[1fr_0.9fr]">

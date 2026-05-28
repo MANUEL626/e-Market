@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   PackageOpen,
   ShieldCheck,
@@ -6,7 +5,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { HomeAuthActions } from "@/components/home-auth-actions";
+import { PublicSiteHeader } from "@/components/public-site-header";
 import { PricingPlans, type PricingPlan } from "@/components/pricing-plans";
 
 const plans: PricingPlan[] = [
@@ -73,21 +72,7 @@ const includedFeatures: Array<[string, LucideIcon]> = [
 export default function PricingPage() {
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      <header className="flex items-center justify-between border-b border-gray-100 bg-white px-8 py-4">
-        <div className="flex items-center gap-8">
-          <Link href="/" className="text-xl font-bold tracking-tight text-gray-900">
-            Indigo Marketplace
-          </Link>
-          <nav className="hidden gap-6 text-sm font-medium text-gray-500 md:flex">
-            <Link href="/" className="hover:text-gray-900">Marketplace</Link>
-            <Link href="/solutions" className="hover:text-gray-900">Solutions</Link>
-            <Link href="/pricing" className="border-b-2 border-indigo-600 pb-1 text-indigo-600">Pricing</Link>
-          </nav>
-        </div>
-        <div className="flex items-center gap-6">
-          <HomeAuthActions variant="header" />
-        </div>
-      </header>
+      <PublicSiteHeader />
 
       <main className="flex-1">
         <section className="mx-auto max-w-7xl px-8 py-20 text-center">

@@ -9,16 +9,17 @@ import {
   Search,
   List,
   LayoutGrid,
-  FileEdit,
   Info,
   Loader2,
   RefreshCw,
   Megaphone,
 } from "lucide-react";
 import { listArticles } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
-import { isAdminProfile } from "@/lib/authz";
+import {
+  SalesOrganizationGate,
+  useDashboardAccess,
+} from "@/components/dashboard/dashboard-access-provider";
 import { translate } from "@/lib/l10n";
 import {
   articleCategoryLabel,
@@ -33,9 +34,20 @@ import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 
 const stockCacheKey = (organizationId: string, activeOnly: boolean) =>
   `stock:articles:${organizationId}:${activeOnly ? "active" : "all"}`;
+const STOCK_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export default function StockManagementPage() {
+  return (
+    <SalesOrganizationGate description="Le stock, les articles et les prix sont disponibles uniquement pour les organisations de vente.">
+      <StockManagementContent />
+    </SalesOrganizationGate>
+  );
+}
+
+function StockManagementContent() {
   const { profile } = useMemberProfile();
+  const access = useDashboardAccess();
+  const { isAdmin } = access;
   const t = (key: string) => translate(profile?.params?.locale, key);
   const [articles, setArticles] = useState<OrganizationArticle[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string | null>>({});
@@ -43,7 +55,9 @@ export default function StockManagementPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const activeArticlesLimitExceeded = access.isLimitExceeded("active_articles");
+  const activeArticlesUsage = access.getUsage("active_articles");
+  const activeArticlesLimit = access.getLimit("active_articles");
 
   const load = useCallback(async () => {
     setError(null);
@@ -57,13 +71,13 @@ export default function StockManagementPage() {
       setLoading(true);
     }
     try {
-      const profile = await loadMemberProfileForSession();
-      setIsAdmin(isAdminProfile(profile));
       const list = await listArticles(activeOnly);
       setArticles(list);
       const refreshedOrganizationId = getEffectiveOrganizationId();
       if (refreshedOrganizationId) {
-        setBusinessCache(stockCacheKey(refreshedOrganizationId, activeOnly), list);
+        setBusinessCache(stockCacheKey(refreshedOrganizationId, activeOnly), list, {
+          ttlMs: STOCK_CACHE_TTL_MS,
+        });
       }
       const map: Record<string, string | null> = {};
       await Promise.all(
@@ -189,12 +203,6 @@ export default function StockManagementPage() {
           {isAdmin && (
             <>
               <Link
-                href="/dashboard/stock/drafts"
-                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
-              >
-                <FileEdit className="w-4 h-4" /> {t("drafts")}
-              </Link>
-              <Link
                 href="/dashboard/stock/posts"
                 className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-semibold rounded-full transition shadow-sm"
               >
@@ -202,7 +210,15 @@ export default function StockManagementPage() {
               </Link>
               <Link
                 href="/dashboard/stock/new"
-                className="flex items-center gap-2 px-5 py-2.5 bg-[#3730A3] hover:bg-[#2e2889] text-white text-sm font-semibold rounded-full transition shadow-sm"
+                aria-disabled={activeArticlesLimitExceeded}
+                onClick={(event) => {
+                  if (activeArticlesLimitExceeded) event.preventDefault();
+                }}
+                className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-full transition shadow-sm ${
+                  activeArticlesLimitExceeded
+                    ? "pointer-events-none bg-gray-200 text-gray-500"
+                    : "bg-[#3730A3] hover:bg-[#2e2889] text-white"
+                }`}
               >
                 <Plus className="w-4 h-4" /> {t("addArticle")}
               </Link>
@@ -210,6 +226,15 @@ export default function StockManagementPage() {
           )}
         </div>
       </div>
+
+      {activeArticlesLimitExceeded && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Limite d'articles actifs atteinte
+          {activeArticlesLimit != null
+            ? ` (${activeArticlesUsage ?? 0}/${activeArticlesLimit}).`
+            : "."} Passez a un plan superieur pour ajouter de nouveaux articles.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white p-6 rounded-[24px] shadow-sm border border-gray-100 flex flex-col justify-between hover:shadow-md transition">
@@ -348,7 +373,7 @@ export default function StockManagementPage() {
                         {localizedCategoryLabel(product.category)}
                       </td>
                       <td className="px-6 py-4 font-bold text-gray-900">
-                        {formatUnitPrice(product.unit_sale_price)}
+                        {formatUnitPrice(product.unit_sale_price, product.sale_currency ?? undefined)}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">

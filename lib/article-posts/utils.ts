@@ -12,13 +12,13 @@ export const ARTICLE_POST_CAPTION_MAX = 500;
 
 export const ARTICLE_POST_BUCKET = "organization-article-posts" as const;
 
-export function isArticlePostSlot(n: number): n is 1 | 2 | 3 {
-  return n === 1 || n === 2 || n === 3;
+export function isArticlePostSlot(n: number): boolean {
+  return Number.isInteger(n) && n >= 1;
 }
 
-export function assertArticlePostSlot(slot: number): asserts slot is 1 | 2 | 3 {
+export function assertArticlePostSlot(slot: number): void {
   if (!isArticlePostSlot(slot)) {
-    throw new Error("Emplacement invalide : utilisez 1, 2 ou 3.");
+    throw new Error("Emplacement invalide : utilisez un entier superieur ou egal a 1.");
   }
 }
 

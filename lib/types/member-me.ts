@@ -5,6 +5,10 @@ export type MemberMeOrganization = {
   description: string | null;
   profile_picture: string | null;
   countries: string[] | null;
+  default_currencies?: {
+    purchase?: string | null;
+    sale?: string | null;
+  } | null;
   created_by: string;
   created_at: string;
 };

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   Loader2,
@@ -20,6 +20,7 @@ import {
 } from "@/lib/api/emall-client";
 import type { OrganizationMember } from "@/lib/types/organization-members";
 import { translate } from "@/lib/i18n";
+import { useDashboardAccess } from "@/components/dashboard/dashboard-access-provider";
 
 function canManageTeam(
   m: { member_type: string; activity_status: boolean } | undefined
@@ -34,6 +35,7 @@ export default function TeamMemberDetailPage() {
   const isNew = rawId === "new";
 
   const { profile, loading: profileLoading } = useMemberProfile();
+  const access = useDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const primary = profile ? getPrimaryMembership(profile) : undefined;
   const manage = canManageTeam(primary);
@@ -52,6 +54,23 @@ export default function TeamMemberDetailPage() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteErr, setInviteErr] = useState<string | null>(null);
   const [inviteOk, setInviteOk] = useState<string | null>(null);
+  const teamLimitExceeded = access.isLimitExceeded("team_members");
+  const hasMemberChanges = useMemo(() => {
+    if (!member) return false;
+    return (
+      memberType !== member.member_type ||
+      memberRole !== member.member_role ||
+      activityStatus !== member.activity_status
+    );
+  }, [activityStatus, member, memberRole, memberType]);
+
+  function resetMemberForm() {
+    if (!member) return;
+    setMemberType(member.member_type);
+    setMemberRole(member.member_role);
+    setActivityStatus(member.activity_status);
+    setSaveErr(null);
+  }
 
   const loadMember = useCallback(async () => {
     if (!rawId || isNew) return;
@@ -108,6 +127,12 @@ export default function TeamMemberDetailPage() {
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
+    if (teamLimitExceeded) {
+      setInviteErr(
+        "La limite de membres de votre abonnement est atteinte. Changez de plan avant d'inviter un nouveau membre."
+      );
+      return;
+    }
     setInviteBusy(true);
     setInviteErr(null);
     setInviteOk(null);
@@ -189,7 +214,7 @@ export default function TeamMemberDetailPage() {
             </Link>
             <button
               type="submit"
-              disabled={inviteBusy}
+              disabled={inviteBusy || teamLimitExceeded}
               className="px-8 py-3 bg-[#3730A3] hover:bg-[#2e2889] disabled:opacity-60 text-white text-sm font-bold rounded-full transition flex items-center gap-2"
             >
               {inviteBusy && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -324,9 +349,15 @@ export default function TeamMemberDetailPage() {
               <div className="flex justify-end gap-4 pt-4">
                 <Link
                   href="/dashboard/team"
+                  onClick={(event) => {
+                    if (hasMemberChanges) {
+                      event.preventDefault();
+                      resetMemberForm();
+                    }
+                  }}
                   className="px-6 py-3 text-sm font-bold text-gray-600 hover:text-gray-900"
                 >
-                  {t("cancel")}
+                  {hasMemberChanges ? t("cancel") : "Retour"}
                 </Link>
                 <button
                   type="submit"

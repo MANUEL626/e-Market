@@ -5,36 +5,63 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Plus, Trash2, Loader2, Info, Package } from "lucide-react";
 import { createArticleOrder, listArticles } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
-import { isAdminProfile } from "@/lib/authz";
-import { AdminRequired } from "@/components/dashboard/admin-required";
+import { getPrimaryMembership } from "@/lib/api/member-me";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+} from "@/components/dashboard/dashboard-access-provider";
+import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import type { OrganizationArticle } from "@/lib/types/article-orders";
+import {
+  API_CURRENCY_OPTIONS,
+  DEFAULT_PURCHASE_CURRENCY,
+  formatMoney,
+  normalizeApiCurrency,
+  type ApiCurrencyCode,
+} from "@/lib/currencies";
 
-type LineDraft = { article_id: string; quantity_ordered: number };
+type LineDraft = { article_id: string; quantity_ordered: number; total_price: string };
 
 export default function NewOrderPage() {
+  return (
+    <SalesOrganizationGate description="Les commandes fournisseur sont disponibles uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut creer une commande fournisseur.">
+        <NewOrderContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function NewOrderContent() {
   const router = useRouter();
+  const { profile } = useMemberProfile();
   const [articles, setArticles] = useState<OrganizationArticle[]>([]);
   const [note, setNote] = useState("");
-  const [lines, setLines] = useState<LineDraft[]>([{ article_id: "", quantity_ordered: 1 }]);
+  const [currency, setCurrency] = useState<ApiCurrencyCode | "">("");
+  const [defaultPurchaseCurrency, setDefaultPurchaseCurrency] =
+    useState<ApiCurrencyCode>(DEFAULT_PURCHASE_CURRENCY);
+  const [lines, setLines] = useState<LineDraft[]>([
+    { article_id: "", quantity_ordered: 1, total_price: "" },
+  ]);
   const [loading, setLoading] = useState(true);
-  const [accessLoading, setAccessLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const profile = await loadMemberProfileForSession();
-        const allowed = isAdminProfile(profile);
+        const organizationId = getEffectiveOrganizationId();
+        const org = profile ? getPrimaryMembership(profile)?.organization : undefined;
+        const resolvedDefaultPurchaseCurrency = normalizeApiCurrency(
+          org?.default_currencies?.purchase,
+          DEFAULT_PURCHASE_CURRENCY
+        );
         if (!cancelled) {
-          setIsAdmin(allowed);
-          setAccessLoading(false);
+          setDefaultPurchaseCurrency(resolvedDefaultPurchaseCurrency);
         }
-        if (!allowed) return;
-        if (!getEffectiveOrganizationId()) {
+        if (!organizationId) {
           if (!cancelled) setLoading(false);
           return;
         }
@@ -43,7 +70,6 @@ export default function NewOrderPage() {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Impossible de charger les articles");
-          setAccessLoading(false);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -52,10 +78,10 @@ export default function NewOrderPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [profile]);
 
   const addLine = () => {
-    setLines((prev) => [...prev, { article_id: "", quantity_ordered: 1 }]);
+    setLines((prev) => [...prev, { article_id: "", quantity_ordered: 1, total_price: "" }]);
   };
 
   const removeLine = (index: number) => {
@@ -65,6 +91,17 @@ export default function NewOrderPage() {
   const updateLine = (index: number, patch: Partial<LineDraft>) => {
     setLines((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)));
   };
+
+  const parseNonNegativeAmount = (raw: string) => {
+    const amount = Number.parseFloat(raw.replace(/\s/g, "").replace(",", "."));
+    return Number.isNaN(amount) || amount < 0 ? NaN : amount;
+  };
+
+  const selectedCurrency = currency || defaultPurchaseCurrency;
+  const orderTotal = lines.reduce((sum, line) => {
+    const amount = parseNonNegativeAmount(line.total_price);
+    return Number.isNaN(amount) ? sum : sum + amount;
+  }, 0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,9 +115,14 @@ export default function NewOrderPage() {
       .map((l) => ({
         article_id: l.article_id,
         quantity_ordered: Math.max(1, Math.floor(Number(l.quantity_ordered)) || 1),
+        total_price: parseNonNegativeAmount(l.total_price),
       }));
     if (cleaned.length === 0) {
       setError("Ajoutez au moins une ligne avec un article sélectionné.");
+      return;
+    }
+    if (cleaned.some((l) => Number.isNaN(l.total_price))) {
+      setError("Indiquez un prix total fournisseur valide pour chaque ligne.");
       return;
     }
     const ids = new Set(cleaned.map((l) => l.article_id));
@@ -92,6 +134,7 @@ export default function NewOrderPage() {
     try {
       const order = await createArticleOrder({
         note: note.trim() || null,
+        ...(currency ? { currency } : {}),
         lines: cleaned,
       });
       router.push(`/dashboard/orders/${order.id}`);
@@ -101,21 +144,6 @@ export default function NewOrderPage() {
       setSubmitting(false);
     }
   };
-
-  if (accessLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 py-28 text-gray-500">
-        <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
-        <span className="text-sm font-medium">Verification des droits...</span>
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <AdminRequired description="Seul un administrateur peut creer une commande fournisseur." />
-    );
-  }
 
   if (!loading && !getEffectiveOrganizationId()) {
     return (
@@ -177,6 +205,37 @@ export default function NewOrderPage() {
                 />
               </div>
 
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+                <div>
+                  <label htmlFor="order-currency" className="block text-sm font-bold text-gray-900 mb-2">
+                    Devise fournisseur
+                  </label>
+                  <select
+                    id="order-currency"
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value as ApiCurrencyCode | "")}
+                    className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 transition"
+                  >
+                    <option value="">
+                      Defaut organisation ({defaultPurchaseCurrency.toUpperCase()})
+                    </option>
+                    {API_CURRENCY_OPTIONS.map((option) => (
+                      <option key={option.code} value={option.code}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm">
+                  <p className="text-xs font-bold uppercase tracking-wide text-indigo-500">
+                    Total commande
+                  </p>
+                  <p className="mt-1 text-lg font-extrabold text-indigo-950">
+                    {formatMoney(orderTotal, selectedCurrency)}
+                  </p>
+                </div>
+              </div>
+
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-bold text-gray-900">Lignes de commande</h2>
@@ -193,7 +252,7 @@ export default function NewOrderPage() {
                   {lines.map((line, index) => (
                     <div
                       key={index}
-                      className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end p-5 rounded-2xl bg-gradient-to-br from-gray-50 to-indigo-50/30 border border-gray-100"
+                      className="grid grid-cols-1 gap-3 rounded-2xl border border-gray-100 bg-gradient-to-br from-gray-50 to-indigo-50/30 p-5 sm:grid-cols-[minmax(0,1fr)_9rem_11rem_auto] sm:items-end"
                     >
                       <div className="flex-1 min-w-0">
                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">
@@ -224,6 +283,19 @@ export default function NewOrderPage() {
                           onChange={(e) =>
                             updateLine(index, { quantity_ordered: Number(e.target.value) || 1 })
                           }
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm tabular-nums"
+                        />
+                      </div>
+                      <div className="w-full">
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">
+                          Prix total
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={line.total_price}
+                          onChange={(e) => updateLine(index, { total_price: e.target.value })}
+                          placeholder="ex. 450"
                           className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm tabular-nums"
                         />
                       </div>

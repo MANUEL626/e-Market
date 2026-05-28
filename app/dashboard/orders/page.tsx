@@ -13,15 +13,17 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { listArticleOrders } from "@/lib/api/emall-client";
-import { loadMemberProfileForSession } from "@/lib/api/member-me";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
-import { isAdminProfile } from "@/lib/authz";
-import { AdminRequired } from "@/components/dashboard/admin-required";
+import {
+  AdminGate,
+  SalesOrganizationGate,
+} from "@/components/dashboard/dashboard-access-provider";
 import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import { translate } from "@/lib/l10n";
 import type { ArticleOrder, OrderStatus } from "@/lib/types/article-orders";
 import { getBusinessCache, setBusinessCache } from "@/lib/realtime/business-cache";
 import { subscribeToArticleOrders } from "@/lib/realtime/business-realtime";
+import { formatMoney } from "@/lib/currencies";
 
 const STATUS_FILTER: { value: "all" | OrderStatus; labelKey: string }[] = [
   { value: "all", labelKey: "all" },
@@ -29,6 +31,7 @@ const STATUS_FILTER: { value: "all" | OrderStatus; labelKey: string }[] = [
   { value: "received", labelKey: "received" },
   { value: "cancelled", labelKey: "cancelled" },
 ];
+const ORDERS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function statusBadge(status: OrderStatus) {
   const map: Record<OrderStatus, string> = {
@@ -49,6 +52,16 @@ function statusBadge(status: OrderStatus) {
 }
 
 export default function OrdersPage() {
+  return (
+    <SalesOrganizationGate description="Les commandes fournisseur sont disponibles uniquement pour les organisations de vente.">
+      <AdminGate description="Seul un administrateur peut acceder aux commandes fournisseur.">
+        <OrdersContent />
+      </AdminGate>
+    </SalesOrganizationGate>
+  );
+}
+
+function OrdersContent() {
   const { profile } = useMemberProfile();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const [allOrders, setAllOrders] = useState<ArticleOrder[]>([]);
@@ -56,8 +69,6 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [orgMissing, setOrgMissing] = useState(false);
-  const [accessLoading, setAccessLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
 
   const orders = useMemo(() => {
@@ -73,14 +84,6 @@ export default function OrdersPage() {
   }, [allOrders]);
 
   const loadOrders = useCallback(async () => {
-    const profile = await loadMemberProfileForSession();
-    const allowed = isAdminProfile(profile);
-    setIsAdmin(allowed);
-    setAccessLoading(false);
-    if (!allowed) {
-      setAllOrders([]);
-      return;
-    }
     const orgId = getEffectiveOrganizationId();
     setOrganizationId(orgId);
     if (!orgId) {
@@ -97,7 +100,7 @@ export default function OrdersPage() {
     }
     const list = await listArticleOrders(undefined);
     setAllOrders(list);
-    setBusinessCache(cacheKey, list);
+    setBusinessCache(cacheKey, list, { ttlMs: ORDERS_CACHE_TTL_MS });
   }, []);
 
   useEffect(() => {
@@ -133,7 +136,6 @@ export default function OrdersPage() {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erreur";
         if (!cancelled) {
-          setAccessLoading(false);
           if (msg === "AUTH_REQUIRED") {
             setError("Vous devez être connecté (Supabase) pour voir les commandes.");
           } else if (msg === "SUPABASE_CONFIG") {
@@ -150,21 +152,6 @@ export default function OrdersPage() {
       cancelled = true;
     };
   }, [loadOrders]);
-
-  if (accessLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 py-28 text-gray-500">
-        <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
-        <span className="text-sm font-medium">{t("verifyAccess")}</span>
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <AdminRequired description="Seul un administrateur peut acceder aux commandes fournisseur." />
-    );
-  }
 
   return (
     <div className="max-w-[1200px] mx-auto pb-12">
@@ -291,6 +278,7 @@ export default function OrdersPage() {
                   <th className="px-6 py-4 font-semibold">{t("status")}</th>
                   <th className="px-6 py-4 font-semibold">{t("referenceNote")}</th>
                   <th className="px-6 py-4 font-semibold">{t("lines")}</th>
+                  <th className="px-6 py-4 font-semibold">Total</th>
                   <th className="px-6 py-4 font-semibold">{t("createdAt")}</th>
                   <th className="px-6 py-4 font-semibold text-right">{t("actions")}</th>
                 </tr>
@@ -306,6 +294,9 @@ export default function OrdersPage() {
                       <span className="line-clamp-2 font-medium">{o.note || "Sans note"}</span>
                     </td>
                     <td className="px-6 py-4 text-gray-600 tabular-nums">{o.lines?.length ?? "—"}</td>
+                    <td className="px-6 py-4 font-bold text-gray-900 whitespace-nowrap">
+                      {formatMoney(o.total_amount, o.currency)}
+                    </td>
                     <td className="px-6 py-4 text-gray-500 whitespace-nowrap text-xs sm:text-sm">
                       {o.created_at
                         ? new Date(o.created_at).toLocaleString("fr-FR", {

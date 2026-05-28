@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { getPrimaryMembership, loadMemberProfileForSession } from "@/lib/api/member-me";
+import { getPrimaryMembership } from "@/lib/api/member-me";
 import { isAdminProfile } from "@/lib/authz";
 import {
   assignCustomerSaleDelivery,
@@ -34,6 +34,7 @@ import { getEffectiveOrganizationId } from "@/lib/organization-resolve";
 import { createClient } from "@/lib/supabase/client";
 import { useMemberProfile } from "@/lib/hooks/use-member-profile";
 import { translate } from "@/lib/i18n";
+import { useDashboardAccess } from "@/components/dashboard/dashboard-access-provider";
 import type { OrganizationMember } from "@/lib/types/organization-members";
 import type {
   CustomerSaleDeliveryTrackPoint,
@@ -191,7 +192,8 @@ function DeliveryMap({ points }: { points: CustomerSaleDeliveryTrackPoint[] }) {
 }
 
 export default function DeliveryPage() {
-  const { profile } = useMemberProfile();
+  const { profile, loading: profileLoading } = useMemberProfile();
+  const access = useDashboardAccess();
   const t = (key: string) => translate(profile?.params?.locale, key);
   const [orders, setOrders] = useState<CustomerSaleOrderDetail[]>([]);
   const [assignments, setAssignments] = useState<CustomerSaleOrderDetail[]>([]);
@@ -254,6 +256,12 @@ export default function DeliveryPage() {
   }, [selectedAssignedMember]);
 
   const isDeliveryMember = currentMemberRole === "delivery_management";
+  const deliveryFeatureAllowed =
+    access.isDeliveryOrganization ||
+    access.memberRole === "delivery_management" ||
+    access.hasFeature("pickup_delivery");
+  const deliveryAssignmentAllowed = access.hasFeature("delivery_assignment");
+  const realtimeGpsAllowed = access.hasFeature("realtime_gps");
   const canManageSelectedDelivery =
     isDeliveryMember &&
     Boolean(selected?.order.assigned_delivery_member_id) &&
@@ -270,7 +278,12 @@ export default function DeliveryPage() {
 
   const loadData = useCallback(async () => {
     setError(null);
-    const profile = await loadMemberProfileForSession();
+    if (!deliveryFeatureAllowed) {
+      setOrders([]);
+      setAssignments([]);
+      setMembers([]);
+      return;
+    }
     const primaryMembership = profile ? getPrimaryMembership(profile) : undefined;
     setCurrentMemberId(primaryMembership?.id ?? null);
     setCurrentMemberRole(primaryMembership?.member_role ?? null);
@@ -282,7 +295,7 @@ export default function DeliveryPage() {
       throw new Error("ID d'organisation introuvable.");
     }
     const [sales, assigned, orgMembers] = await Promise.all([
-      listCustomerSales(),
+      listCustomerSales().catch(() => [] as CustomerSaleOrderDetail[]),
       listDeliveryAssignments().catch(() => [] as CustomerSaleOrderDetail[]),
       listOrganizationMembers().catch(() => [] as OrganizationMember[]),
     ]);
@@ -311,9 +324,10 @@ export default function DeliveryPage() {
           ? current
           : visibleDeliveryOrders[0]?.order.id ?? null
     );
-  }, []);
+  }, [deliveryFeatureAllowed, profile]);
 
   useEffect(() => {
+    if (profileLoading) return;
     let cancelled = false;
     (async () => {
       try {
@@ -328,7 +342,7 @@ export default function DeliveryPage() {
     return () => {
       cancelled = true;
     };
-  }, [loadData]);
+  }, [loadData, profileLoading]);
 
   useEffect(() => {
     if (!selectedOrderId) {
@@ -501,6 +515,17 @@ export default function DeliveryPage() {
     }
   };
 
+  if (!deliveryFeatureAllowed) {
+    return (
+      <div className="mx-auto max-w-[900px] pb-12">
+        <div className="rounded-[8px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+          Pickup et livraison ne sont pas inclus dans l'abonnement actuel de cette
+          organisation.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-[1280px] pb-12">
       <div className="mb-8 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
@@ -660,7 +685,13 @@ export default function DeliveryPage() {
                 ) : null}
               </div>
 
-              <DeliveryMap points={trackPoints} />
+              {realtimeGpsAllowed ? (
+                <DeliveryMap points={trackPoints} />
+              ) : (
+                <div className="rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+                  Le suivi GPS temps reel n'est pas inclus dans l'abonnement actuel.
+                </div>
+              )}
 
               {trackLoading ? (
                 <p className="mt-3 inline-flex items-center gap-2 text-sm text-gray-500">
@@ -684,12 +715,17 @@ export default function DeliveryPage() {
               {isAdmin && !selectedAlreadyAssigned ? (
                 <div className="rounded-[8px] border border-gray-100 bg-white p-5 shadow-sm">
                   <h3 className="mb-4 font-extrabold text-gray-900">Assigner un livreur</h3>
+                  {!deliveryAssignmentAllowed ? (
+                    <p className="rounded-[8px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      L'assignation livreur n'est pas incluse dans l'abonnement actuel.
+                    </p>
+                  ) : null}
                   <div className="flex flex-col gap-3 sm:flex-row">
                     <select
                       value={assignMemberId}
                       onChange={(e) => setAssignMemberId(e.target.value)}
                       className="min-w-0 flex-1 rounded-[8px] border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-sky-400"
-                      disabled={!selected}
+                      disabled={!selected || !deliveryAssignmentAllowed}
                     >
                       <option value="">Choisir un membre livraison</option>
                       {deliveryMembers.map((member) => (
@@ -701,7 +737,7 @@ export default function DeliveryPage() {
                     <button
                       type="button"
                       onClick={() => void assignSelectedOrder()}
-                      disabled={!selected || !assignMemberId || assigning}
+                      disabled={!selected || !assignMemberId || assigning || !deliveryAssignmentAllowed}
                       className="inline-flex items-center justify-center gap-2 rounded-full bg-[#3730A3] px-4 py-2 text-sm font-bold text-white hover:bg-[#2f2788] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {assigning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
@@ -721,7 +757,7 @@ export default function DeliveryPage() {
                     <button
                       type="button"
                       onClick={() => void sendCurrentLocation()}
-                      disabled={!canManageSelectedDelivery || postingLocation}
+                      disabled={!canManageSelectedDelivery || postingLocation || !realtimeGpsAllowed}
                       className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {postingLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -730,7 +766,7 @@ export default function DeliveryPage() {
                     <button
                       type="button"
                       onClick={toggleWatch}
-                      disabled={!canManageSelectedDelivery}
+                      disabled={!canManageSelectedDelivery || !realtimeGpsAllowed}
                       className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 ${
                         watching
                           ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
@@ -742,7 +778,9 @@ export default function DeliveryPage() {
                     </button>
                   </div>
                   <p className="mt-3 text-xs text-gray-500">
-                    {canManageSelectedDelivery
+                    {!realtimeGpsAllowed
+                      ? "Le suivi GPS temps reel n'est pas inclus dans l'abonnement actuel."
+                      : canManageSelectedDelivery
                       ? "Action reservee au livreur assigne. Les points POST declenchent ensuite Realtime sur la carte."
                       : selectedAssignedMemberLabel
                         ? `Cette livraison est assignee a ${selectedAssignedMemberLabel}.`
